@@ -20,11 +20,6 @@ pub(super) struct ModeMenu {
     pub(super) preview: Option<String>,
 }
 
-/// The key a Thread's mode chip records its bounds under.
-pub(super) fn chip_trigger(thread: ThreadKey) -> SharedString {
-    format!("mode-chip-{}", thread.thread().get()).into()
-}
-
 impl CockpitView {
     /// Open the permission menu on `thread`'s Session, or shut it.
     pub(super) fn toggle_mode_menu(&mut self, thread: ThreadKey, generation: u64, cx: &mut Context<Self>) {
@@ -53,7 +48,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let trigger = self.hang_from(&chip_trigger(menu.thread), window)?;
+        let trigger = self.hang_from(&ferrite_pane::cell::mode_chip_trigger(menu.thread), window)?;
         let surface = self.mode_menu_surface(menu, cx)?;
         Some(
             anchored()

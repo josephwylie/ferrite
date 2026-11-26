@@ -2,9 +2,9 @@
 //! each drawn by a view of its own and rebuilt only when something it shows
 //! changes.
 //!
-//! A Pane's view (`PartView`) reads what its cell draws of the window
-//! through `Source` (`cell_inputs`, and the details card's sections) and
-//! draws the cell in its own context (`pane_cell`), holding no handle to
+//! A Pane's view (`ferrite_pane::cell::CellView`) reads what its cell draws
+//! of the window through `Source` (`cell_inputs`, and the details card's
+//! sections) and draws the cell in its own context, holding no handle to
 //! the Cockpit. What a press in the cell asks of the window it emits as a
 //! `PaneEvent` naming the Pane, which the Cockpit hears
 //! (`on_pane_event`); the nav draws only what it last read of the Cockpit
@@ -32,16 +32,13 @@ use gpui::{
     div, prelude::*, px, AnyElement, AnyView, Context, Div, Entity, StyleRefinement, Window,
 };
 
-use super::details::content::Content;
-use super::pane_cell::{
-    CellAsk, CellInputs, ControlsInputs, Doors, DraftInputs, KindInputs, PaneAsk, PaneAsks,
-    PaneEvent, QueuedAct, ThreadInputs,
-};
 use super::popups::Popup;
 use super::surfaces::SurfaceAction;
 use super::{CockpitView, MenuTarget, Submit};
-use ferrite_client::cockpit::Cockpit;
-use ferrite_core::activity::Subject;
+use ferrite_pane::cell::{
+    band_trigger, CellAsk, CellInputs, CellView, ControlsInputs, DetailsAsk, Doors, DraftInputs, KindInputs,
+    PaneAsk, PaneEvent, QueuedAct, ThreadInputs, HERO_TRIGGER,
+};
 use ferrite_core::ThreadKey;
 use ferrite_ui::components::MenuDoor;
 use ferrite_ui::source::Source;
@@ -56,55 +53,13 @@ pub(crate) enum Part {
     Pane(PaneIdentity),
 }
 
-/// What the details card asks of the window: its sections for the Thread,
-/// the Subject its Pane shows, and how many pages of `Previous agents`.
-type DetailsAsk = (ThreadKey, Subject, usize);
-
-/// The view that draws one Pane's cell, from what it reads of the window.
-pub(crate) struct PartView {
-    pane: PaneIdentity,
-    /// The client's model, which the cell reads as it draws.
-    model: Entity<Cockpit>,
-    /// What the cell draws of the window (`CockpitView::cell_inputs`).
-    inputs: Source<CellInputs, CellAsk>,
-    /// The details card's sections (`CockpitView::details_content`), read
-    /// only while the card stands.
-    details: Source<Content, DetailsAsk>,
-}
-
-impl Render for PartView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // This part's loops are laid out afresh for the loops overlay.
-        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
-        let ask = CellAsk {
-            pane: self.pane,
-            viewport: window.viewport_size(),
-        };
-        let Some(inputs) = self.inputs.read(&ask, cx) else {
-            return div().into_any_element();
-        };
-        let asks = PaneAsks::new(cx.entity().downgrade(), self.pane);
-        let details = |thread, subject: &Subject, pages, cx: &gpui::App| {
-            self.details.read(&(thread, subject.clone(), pages), cx)
-        };
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(super::pane_cell::cell(inputs, &self.model, &details, &asks, window, cx))
-            .into_any_element()
-    }
-}
-
-impl gpui::EventEmitter<PaneEvent> for PartView {}
-
 /// The parts' views and what each was last mounted with.
 #[derive(Default)]
 pub(crate) struct Parts {
     /// Whether the nav and the Panes are cached parts: with the loops
     /// overlay, over a cached Cockpit.
     pub on: bool,
-    views: HashMap<PaneIdentity, Entity<PartView>>,
+    views: HashMap<PaneIdentity, Entity<CellView>>,
 }
 
 impl Parts {
@@ -131,7 +86,7 @@ impl CockpitView {
 
     /// `pane`'s view, made the first time it is drawn: the Cockpit hears
     /// what its cell asks for as long as it lives.
-    fn part_view(&self, pane: PaneIdentity, window: &Window, cx: &mut Context<Self>) -> Entity<PartView> {
+    fn part_view(&self, pane: PaneIdentity, window: &Window, cx: &mut Context<Self>) -> Entity<CellView> {
         if let Some(view) = self.parts.borrow().views.get(&pane) {
             return view.clone();
         }
@@ -141,12 +96,7 @@ impl CockpitView {
             Some(root.details_content(*thread, subject, *pages, cx))
         });
         let model = self.cockpit.clone();
-        let view = cx.new(|_| PartView {
-            pane,
-            model,
-            inputs,
-            details,
-        });
+        let view = cx.new(|_| CellView::new(pane, model, inputs, details));
         cx.subscribe_in(&view, window, Self::on_pane_event).detach();
         self.parts.borrow_mut().views.insert(pane, view.clone());
         view
@@ -216,7 +166,7 @@ impl CockpitView {
     /// Pane gone since the press asks nothing of its own.
     fn on_pane_event(
         &mut self,
-        _: &Entity<PartView>,
+        _: &Entity<CellView>,
         event: &PaneEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -363,7 +313,7 @@ impl CockpitView {
                 self.open_context_menu(MenuTarget::Details(thread), at, cx);
             }
             PaneAsk::CloseDetails => self.close_details(thread, window, cx),
-            PaneAsk::Surface(surface) => self.upsert_surface(thread, surface, cx),
+            PaneAsk::Surface(open) => self.upsert_surface(thread, open.into(), cx),
             PaneAsk::CreatePr => self.create_pr(thread, cx),
             PaneAsk::StopWatching { url } => self.watch_pr(thread, url, false, cx),
             PaneAsk::PreviousAgents => {
@@ -458,7 +408,10 @@ impl CockpitView {
             lost,
             sheet_up: self.sheet_up(cx),
             drop_target: self.drop_target(index, cx),
-            composer_menu: drawn.then(|| self.composer_menu_over(index, cx)).flatten(),
+            composer_menu: drawn
+                .then(|| self.composer_menu_over(index, cx))
+                .flatten()
+                .map(AnyView::from),
             doors: self.cell_doors(identity, &kind, controls.is_some()),
             controls,
             kind,
@@ -482,18 +435,18 @@ impl CockpitView {
             bands: match draft {
                 true => [BandChip::Project, BandChip::Workspace, BandChip::Environment]
                     .into_iter()
-                    .map(|chip| (chip, door(band == Some((chip, false)), super::band_trigger(chip))))
+                    .map(|chip| (chip, door(band == Some((chip, false)), band_trigger(chip))))
                     .collect(),
                 false => Vec::new(),
             },
-            hero: draft.then(|| door(band == Some((BandChip::Project, true)), super::HERO_TRIGGER.into())),
+            hero: draft.then(|| door(band == Some((BandChip::Project, true)), HERO_TRIGGER.into())),
             model: controls.then(|| {
-                door(self.model_picker_open(identity), super::model_picker::chip_trigger(identity))
+                door(self.model_picker_open(identity), ferrite_pane::cell::model_chip_trigger(identity))
             }),
             mode: identity.thread().filter(|_| thread).map(|thread| {
                 door(
                     self.mode_menu().is_some_and(|menu| menu.thread == thread),
-                    super::mode_menu::chip_trigger(thread),
+                    ferrite_pane::cell::mode_chip_trigger(thread),
                 )
             }),
         }
@@ -562,8 +515,22 @@ impl CockpitView {
             if let Some(rect) = rect {
                 cards.inset = theme::tx_inset_at(rect.w, true);
             }
-            cards
+            Box::new(move |window: &mut Window, cx: &mut gpui::App| cards.render(window, cx))
+                as ferrite_pane::cell::DecisionsDraw
         });
+        // The slot's width as the board laid it out this frame (a dragged
+        // seam included), else the Pane's rect's: what the meter says the
+        // cell was drawn at.
+        #[cfg(test)]
+        super::drawn::laid_out(
+            self.panes[index].identity,
+            self.slot_sizes
+                .borrow()
+                .get(&super::pane_leaf(self.panes[index].identity))
+                .map(|(w, _)| *w)
+                .or_else(|| rect.map(|rect| rect.w))
+                .unwrap_or(board.w),
+        );
         ThreadInputs {
             plane: self.on_plane(thread, cx),
             facts: self
@@ -575,16 +542,6 @@ impl CockpitView {
             details_menu_up: self
                 .context_menu()
                 .is_some_and(|menu| menu.target == super::MenuTarget::Details(thread)),
-            // The slot's width as the board laid it out this frame (a
-            // dragged seam included), else the Pane's rect's.
-            #[cfg(test)]
-            cell_width: self
-                .slot_sizes
-                .borrow()
-                .get(&super::pane_leaf(self.panes[index].identity))
-                .map(|(w, _)| *w)
-                .or_else(|| rect.map(|rect| rect.w))
-                .unwrap_or(board.w),
         }
     }
 

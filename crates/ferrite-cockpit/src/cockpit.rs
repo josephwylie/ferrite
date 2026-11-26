@@ -16,7 +16,6 @@ mod browser;
 mod browser_smoke;
 mod checkouts;
 mod cockpit_pane;
-mod composer_footer;
 mod columns;
 mod composer_menu;
 mod context_menu;
@@ -51,7 +50,6 @@ mod nav_undo;
 mod nav_view;
 mod palette;
 pub(crate) mod panel;
-mod pane_cell;
 mod parts;
 mod popups;
 mod pr_reads;
@@ -147,6 +145,10 @@ use ferrite_nav::notifications::{Row as NoticeRow, RowTarget, Verb};
 use ferrite_pane::composer::{Composer, Edited, OpenSource};
 use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
+use ferrite_pane::cell::footer::{effort_chip_label, effort_in_force, tuning_hold, turn_running};
+#[cfg(test)]
+use ferrite_pane::cell::footer::{plugins, TUNING_BUSY_HINT, TUNING_PENDING_HINT};
+use ferrite_pane::cell::{band_trigger, PaneDrag, HERO_TRIGGER};
 use ferrite_pane::pane::{self, PaneView};
 use ferrite_ui::menu;
 use ferrite_pane::select::TranscriptText;
@@ -291,18 +293,6 @@ fn system_tag(machine: &ferrite_core::MachineKey, thread: ThreadId) -> String {
 /// A Pane laid out for the first time has it by the next frame; a few more
 /// cover a layout that settles over two.
 const CARD_GEOMETRY_FRAMES: u8 = 3;
-const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
-const TUNING_PENDING_HINT: &str = "Available once the last change is accepted";
-
-/// Whether a turn runs on this Thread for the stop affordances: from the
-/// moment a prompt is sent — before the provider's first event, which
-/// `busy` waits for — through a starting Session to the turn's end. The
-/// Composer reads it (`pane::primary_actions`), so a way to stop is in view
-/// from the first frame.
-fn turn_running(open: &ThreadView) -> bool {
-    open.busy() || open.operator_turn()
-}
-
 /// The id of the latest queued prompt while it can still be taken back:
 /// what ↑ and ⌫ act on (the strip's rows each act on their own).
 fn queued_to_take_back(open: &ThreadView) -> Option<String> {
@@ -310,18 +300,6 @@ fn queued_to_take_back(open: &ThreadView) -> Option<String> {
         .first()
         .filter(|item| pane::queued_takes_back(item))
         .map(|item| item.id.clone())
-}
-
-/// Why a Thread's model and effort cannot change now, in the words the
-/// pickers show; `None` while they can.
-fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
-    if open.busy() {
-        Some(TUNING_BUSY_HINT)
-    } else if open.tuning() {
-        Some(TUNING_PENDING_HINT)
-    } else {
-        None
-    }
 }
 
 pub(crate) use cockpit_pane::CockpitPane;
@@ -669,14 +647,6 @@ enum Slot {
     Reader(ThreadKey),
 }
 
-/// A board slot on the move: its head is the handle. Dropped on another
-/// slot of the same board it swaps with it (the centre) or splits its
-/// slot (an edge). `leaf` is the slot's leaf in the board's tree.
-#[derive(Clone, Copy, Debug)]
-struct PaneDrag {
-    leaf: Leaf,
-}
-
 /// What a dragged slot's ghost draws: its name, the line under it (a
 /// Pane's branch, a reader's kind), and the size the slot has on the board.
 #[derive(Clone)]
@@ -856,7 +826,8 @@ pub(crate) mod drawn {
     use ferrite_core::roster::PaneIdentity;
     use ferrite_core::ThreadKey;
 
-    /// One Pane as its last build drew it.
+    /// One Pane as its last build drew it, at the width the board last
+    /// laid its slot out.
     #[derive(Clone, Debug, Default, PartialEq)]
     pub(crate) struct Pane {
         pub focused: bool,
@@ -869,9 +840,9 @@ pub(crate) mod drawn {
         pub clock: Option<String>,
     }
 
+
     thread_local! {
-        static PANES: RefCell<HashMap<PaneIdentity, Pane>> = RefCell::new(HashMap::new());
-        static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
+        static WIDTHS: RefCell<HashMap<PaneIdentity, f32>> = RefCell::new(HashMap::new());
         static HEAD_RENDERS: Cell<usize> = const { Cell::new(0) };
         static HEARINGS: Cell<usize> = const { Cell::new(0) };
         static NAV_ROWS: RefCell<HashMap<ThreadKey, String>> = RefCell::new(HashMap::new());
@@ -898,12 +869,10 @@ pub(crate) mod drawn {
         PUMPS.with(Cell::get)
     }
 
-    pub(crate) fn built_pane(identity: PaneIdentity) {
-        PANE_RENDERS.with(|renders| *renders.borrow_mut().entry(identity).or_default() += 1);
-    }
-
-    pub(crate) fn record_pane(identity: PaneIdentity, pane: Pane) {
-        PANES.with(|panes| panes.borrow_mut().insert(identity, pane));
+    /// The width the board laid Pane `identity`'s slot out at, read as its
+    /// cell draws.
+    pub(crate) fn laid_out(identity: PaneIdentity, width: f32) {
+        WIDTHS.with(|widths| widths.borrow_mut().insert(identity, width));
     }
 
     pub(crate) fn built_head() {
@@ -937,12 +906,23 @@ pub(crate) mod drawn {
 
     /// The Pane as last drawn.
     pub(crate) fn pane(identity: PaneIdentity) -> Pane {
-        PANES.with(|panes| panes.borrow().get(&identity).cloned().unwrap_or_default())
+        let Some(cell) = ferrite_pane::cell::testing::drawn(identity) else {
+            return Pane::default();
+        };
+        Pane {
+            focused: cell.focused,
+            unread: cell.unread,
+            drop_target: cell.drop_target,
+            editing: cell.editing,
+            reduce_motion: cell.reduce_motion,
+            cell_width: WIDTHS.with(|widths| widths.borrow().get(&identity).copied().unwrap_or_default()),
+            clock: cell.clock,
+        }
     }
 
     /// How many times this Pane has been built on this thread.
     pub(crate) fn pane_renders(identity: PaneIdentity) -> usize {
-        PANE_RENDERS.with(|renders| renders.borrow().get(&identity).copied().unwrap_or(0))
+        ferrite_pane::cell::testing::pane_renders(identity)
     }
 
     /// How many times the nav has been built on this thread.
@@ -6081,44 +6061,6 @@ enum Answer {
 /// of each file rather than every session ever run.
 const IMPORT_ROWS_MAX: usize = 200;
 
-/// The Provider's name as a person says it — the picker's section titles
-/// and the chip before any model is known.
-/// The plugins a Session's commands come from, each with its commands,
-/// in their first command's order: what the provider says is a plugin's
-/// (`CommandSource::Plugin`).
-fn plugins(
-    commands: &[ferrite_core::SessionCommand],
-) -> Vec<(String, Vec<&ferrite_core::SessionCommand>)> {
-    let mut plugins: Vec<(String, Vec<&ferrite_core::SessionCommand>)> = Vec::new();
-    for command in commands {
-        let Some(plugin) = command.source.as_ref().and_then(|source| source.plugin()) else {
-            continue;
-        };
-        match plugins.iter_mut().find(|(name, _)| name == plugin) {
-            Some((_, listed)) => listed.push(command),
-            None => plugins.push((plugin.to_string(), vec![command])),
-        }
-    }
-    plugins
-}
-
-/// What each rung buys, in the words the providers' own menus use.
-/// An effort level as its Composer chip reads it: the title, lowercase
-/// (`high`, `extra high`) — the chip is a quiet control, the menu rows keep
-/// their titles.
-fn effort_chip_label(effort: &str) -> SharedString {
-    SharedString::from(effort_title(effort).to_lowercase())
-}
-
-/// The key a draft's band chip records its bounds under, for the menu it
-/// opens (`band_menu_element`).
-/// The start hero's project word, as a float trigger (`draft_hero`).
-const HERO_TRIGGER: &str = "start-hero-project";
-
-fn band_trigger(chip: pane::BandChip) -> SharedString {
-    format!("band-{chip:?}").into()
-}
-
 impl Band {
     /// The key the control this menu hangs from records its bounds under.
     fn trigger(&self) -> SharedString {
@@ -6128,55 +6070,6 @@ impl Band {
             band_trigger(self.chip)
         }
     }
-}
-
-/// The effort a chip shows (rule 2.6.5): the Thread's or draft's own
-/// choice, else the operator's saved default, else the model row's own
-/// default (`medium` for Codex). `None` when nothing resolves: a Thread's
-/// chip then hides rather than reading the bare word `effort` (`/effort`
-/// still reaches the picker), and a draft's band chip reads `default`.
-fn effort_value(
-    chosen: Option<&str>,
-    saved: Option<&str>,
-    provider: Provider,
-    model: Option<&str>,
-    announced: &[ferrite_core::ModelInfo],
-) -> Option<SharedString> {
-    if let Some(effort) = chosen.or(saved) {
-        return Some(effort_chip_label(effort));
-    }
-    let rows = ferrite_core::models::catalog(provider, announced);
-    let row = match model {
-        Some(model) => rows.iter().find(|row| row.is(model)),
-        None => rows.first(),
-    };
-    row.and_then(|row| row.default_effort.as_deref())
-        .map(effort_chip_label)
-}
-
-/// The effort in force (FL-13): the chip's word (`effort_value`), else the
-/// level the CLI itself runs at (`models::cli_default_effort`).
-fn effort_in_force(
-    chosen: Option<&str>,
-    saved: Option<&str>,
-    provider: Provider,
-    model: Option<&str>,
-    announced: &[ferrite_core::ModelInfo],
-) -> Option<SharedString> {
-    effort_value(chosen, saved, provider, model, announced).or_else(|| {
-        ferrite_core::models::cli_default_effort(provider, model).map(effort_chip_label)
-    })
-}
-
-/// The effort in force on an open Thread (`medium`): its own choice, else
-/// the operator's default (`saved`), else its model's (`effort_in_force`);
-/// `None` for a model that takes none.
-fn thread_effort(open: &ThreadView, saved: Option<&str>) -> Option<SharedString> {
-    let provider = open.provider();
-    let ladder = ferrite_core::models::efforts_for(provider, open.model(), open.models());
-    (!ladder.is_empty())
-        .then(|| effort_in_force(open.effort(), saved, provider, open.model(), open.models()))
-        .flatten()
 }
 
 /// A model's effort ladder: its wire values, the words the chip prints,

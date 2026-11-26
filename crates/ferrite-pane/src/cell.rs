@@ -1,35 +1,47 @@
-//! A Pane's cell, as its part (`parts::PartView`) draws it, in the part's
-//! own context: the click-to-focus, drop and drag plumbing around
+//! A Pane's cell, drawn by a view of its own (`CellView`) the window mounts
+//! (ADR 0012): the click-to-focus, drop and drag plumbing around
 //! `pane::render_pane` (or `render_draft`), and the controls wired into it.
 //! It draws from its Pane, the client's model, and `CellInputs`: what it
-//! reads of the window, read through `Source` on the root
+//! reads of the window, through a `Source` the window owns
 //! (`CockpitView::cell_inputs`). What a press asks of the window is a
-//! `PaneEvent` naming the Pane, which its part emits and the root hears
-//! (`CockpitView::on_pane_event`).
+//! `PaneEvent` naming the Pane, which its view emits and the window hears
+//! (`CockpitView::on_pane_event`). Nothing here names the window, so the
+//! cell builds and tests without it.
 
-use super::details::content::Content;
-use super::parts::PartView;
-use super::subagents::Cards;
-use super::surfaces::SurfaceId;
-use super::*;
+pub mod footer;
+mod hero;
+#[cfg(test)]
+mod tests;
+
 use ferrite_core::activity::Subject;
 use ferrite_core::delegate::DelegateId;
+use ferrite_core::roster::PaneIdentity;
 use ferrite_core::server::ServerId;
-use ferrite_core::SessionControl;
+use ferrite_client::cockpit::Cockpit;
+use ferrite_core::{MachineId, SessionControl, ThreadId, ThreadKey};
 use ferrite_ui::components::{FloatPlace, MenuDoor};
-use gpui::{App, WeakEntity};
+use ferrite_ui::source::Source;
+use gpui::prelude::*;
+use gpui::{
+    div, AnyElement, AnyView, App, Context, Div, Entity, FocusHandle, Focusable, MouseButton,
+    MouseDownEvent, Pixels, Point, SharedString, WeakEntity, Window,
+};
+
+use crate::composer::Composer;
+use crate::details::content::Content;
+use crate::pane::{self, PaneView};
 
 /// What a press in a Pane's cell asks of the window, for the Pane it names.
 #[derive(Clone, Debug)]
-pub(crate) struct PaneEvent {
-    pub(crate) pane: PaneIdentity,
-    pub(crate) ask: PaneAsk,
+pub struct PaneEvent {
+    pub pane: PaneIdentity,
+    pub ask: PaneAsk,
 }
 
 /// What a cell's press asks: each with what the press saw, which the root
 /// acts on.
 #[derive(Clone, Debug)]
-pub(crate) enum PaneAsk {
+pub enum PaneAsk {
     /// A left press anywhere on the cell: the Pane takes the focus.
     Pressed,
     /// A right press on a Thread's cell, at `at`: its context menu, with
@@ -80,8 +92,8 @@ pub(crate) enum PaneAsk {
     /// A press outside the details card standing over the transcript,
     /// neither on its opener nor in its menu: the card shuts.
     CloseDetails,
-    /// A details row: its Surface in the Panel.
-    Surface(SurfaceId),
+    /// A details row: what it opens in the Panel.
+    Surface(DetailsOpen),
     /// The details card's Create PR.
     CreatePr,
     /// The watched PR's eye: stop watching `url`.
@@ -104,24 +116,227 @@ pub(crate) enum PaneAsk {
     CancelDelegate(DelegateId),
 }
 
+/// What a details row opens in the Panel: the pull request, the Changes,
+/// or a side chat by its tab's id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DetailsOpen {
+    PullRequest(u64),
+    Changes,
+    SideChat(u64),
+}
+
 /// A queued prompt's three acts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum QueuedAct {
+pub enum QueuedAct {
     SendNow,
     Edit,
     Remove,
 }
 
-/// Where a cell's presses go: its part, which emits each as a `PaneEvent`
+/// What a cell asks the window: its Pane's inputs, at the window's size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellAsk {
+    pub pane: PaneIdentity,
+    pub viewport: gpui::Size<Pixels>,
+}
+
+/// What a Pane's cell draws of the window rather than of its Pane.
+pub struct CellInputs {
+    /// The Pane's place on the roster this frame: its elements' ids and
+    /// selectors say it. A press names the Pane by `identity`.
+    pub index: usize,
+    pub identity: PaneIdentity,
+    /// The Pane itself, as the window holds it under `identity`.
+    pub view: Entity<PaneView>,
+    pub focused: bool,
+    /// The Pane's machine, while it is lost (ADR 0026).
+    pub lost: Option<MachineId>,
+    pub sheet_up: bool,
+    /// Native files hover this Pane, while their drag is live.
+    pub drop_target: bool,
+    /// The Composer's `/` or `@` menu, while it is up over this Pane.
+    pub composer_menu: Option<AnyView>,
+    pub doors: Doors,
+    /// What a Main Composer's controls read; none on a Subagent's tab.
+    pub controls: Option<ControlsInputs>,
+    pub kind: KindInputs,
+}
+
+/// What the box's controls read of the window.
+pub struct ControlsInputs {
+    /// The `+` menu's focus, while it is up.
+    pub attach_focus: Option<FocusHandle>,
+    /// Where the `+` menu stands: over the Composer once it is laid out,
+    /// else over the window's bar.
+    pub attach_place: FloatPlace,
+    /// The plan-usage ring's popover is held open.
+    pub usage_popover_held: bool,
+    /// The operator's effort for the Pane's provider (Settings).
+    pub effort_default: Option<String>,
+}
+
+/// The menus the cell's controls open, each as its door (ADR 0043):
+/// whether it is up from that control, and where the control's bounds go
+/// for it to hang from. Each control drawn takes its own.
+#[derive(Default)]
+pub struct Doors {
+    /// A draft's band chips': Project, Workspace, where it runs.
+    pub bands: Vec<(pane::BandChip, MenuDoor)>,
+    /// An empty draft's hero word's: its Project menu.
+    pub hero: Option<MenuDoor>,
+    /// A Main Composer's model chip's: the model picker.
+    pub model: Option<MenuDoor>,
+    /// A Thread's mode chip's: the permission menu.
+    pub mode: Option<MenuDoor>,
+}
+
+impl Doors {
+    /// Band chip `chip`'s door.
+    pub(crate) fn band(&mut self, chip: pane::BandChip) -> Option<MenuDoor> {
+        let at = self.bands.iter().position(|(band, _)| *band == chip)?;
+        Some(self.bands.swap_remove(at).1)
+    }
+}
+
+/// A draft's or a Thread's own reads.
+pub enum KindInputs {
+    Draft(DraftInputs),
+    /// A Thread's, once the model has it.
+    Thread(Option<ThreadInputs>),
+}
+
+/// What a draft's band and hero read of the window.
+pub struct DraftInputs {
+    /// Its Project's title, `Project` until one is known.
+    pub project: SharedString,
+    /// The environment chip, while there is more than one environment to
+    /// choose or a copy to wait on.
+    pub environment: Option<(pane::ChipMark, SharedString)>,
+    /// Where it runs as a word, while no chip says: a machine's name.
+    pub machine: Option<String>,
+    /// The copy it waits on: whether that still runs.
+    pub copy_live: Option<bool>,
+    /// The mode a new Thread starts in (Settings).
+    pub mode: String,
+}
+
+/// What a Thread's cell reads of the window.
+pub struct ThreadInputs {
+    /// The Pane is the window's plane, not drawn by the Factory.
+    pub plane: bool,
+    /// Its Project's and branch's words, once its facts are known.
+    pub facts: Option<(Option<SharedString>, Option<SharedString>)>,
+    /// The Decision cards on its plane, as the window draws them.
+    pub decisions: Option<DecisionsDraw>,
+    /// Its details card stands beside the transcript when there is room
+    /// (`ThreadSurfaces::details_inline_open`).
+    pub details_inline_open: bool,
+    /// The details card's menu is up, choosing what the card shows.
+    pub details_menu_up: bool,
+}
+
+/// The window's draw of a Thread's Decision cards, run where the cell
+/// stacks them.
+pub type DecisionsDraw = Box<dyn FnOnce(&mut Window, &mut App) -> Option<AnyElement>>;
+
+/// A board slot on the move: its head is the handle. Dropped on another
+/// slot of the same board it swaps with it (the centre) or splits its
+/// slot (an edge). `leaf` is the slot's leaf in the board's tree.
+#[derive(Clone, Copy, Debug)]
+pub struct PaneDrag {
+    pub leaf: ThreadId,
+}
+
+/// The key the start hero's project word records its bounds under, as a
+/// float trigger (`draft_hero`).
+pub const HERO_TRIGGER: &str = "start-hero-project";
+
+/// The key a draft's band chip records its bounds under, for the menu it
+/// opens.
+pub fn band_trigger(chip: pane::BandChip) -> SharedString {
+    format!("band-{chip:?}").into()
+}
+
+/// The key a model chip records its bounds under, where the picker hangs.
+pub fn model_chip_trigger(pane: PaneIdentity) -> SharedString {
+    format!("model-chip-{pane:?}").into()
+}
+
+/// The key a Thread's mode chip records its bounds under.
+pub fn mode_chip_trigger(thread: ThreadKey) -> SharedString {
+    format!("mode-chip-{}", thread.thread().get()).into()
+}
+
+/// What the details card asks of the window: its sections for the Thread,
+/// the Subject its Pane shows, and how many pages of `Previous agents`.
+pub type DetailsAsk = (ThreadKey, Subject, usize);
+
+/// The view that draws one Pane's cell, from what it reads of the window.
+pub struct CellView {
+    pane: PaneIdentity,
+    /// The client's model, which the cell reads as it draws.
+    model: Entity<Cockpit>,
+    /// What the cell draws of the window (`CockpitView::cell_inputs`).
+    inputs: Source<CellInputs, CellAsk>,
+    /// The details card's sections (`CockpitView::details_content`), read
+    /// only while the card stands.
+    details: Source<Content, DetailsAsk>,
+}
+
+impl CellView {
+    /// The cell of Pane `pane`, reading the window through `inputs` and
+    /// the details card's sections through `details`.
+    pub fn new(
+        pane: PaneIdentity,
+        model: Entity<Cockpit>,
+        inputs: Source<CellInputs, CellAsk>,
+        details: Source<Content, DetailsAsk>,
+    ) -> Self {
+        Self {
+            pane,
+            model,
+            inputs,
+            details,
+        }
+    }
+}
+
+impl Render for CellView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // This part's loops are laid out afresh for the loops overlay.
+        ferrite_ui::loops_overlay::begin(window, cx.entity_id());
+        let ask = CellAsk {
+            pane: self.pane,
+            viewport: window.viewport_size(),
+        };
+        let Some(inputs) = self.inputs.read(&ask, cx) else {
+            return div().into_any_element();
+        };
+        let asks = PaneAsks::new(cx.entity().downgrade(), self.pane);
+        let details = |thread, subject: &Subject, pages, cx: &gpui::App| {
+            self.details.read(&(thread, subject.clone(), pages), cx)
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(cell(inputs, &self.model, &details, &asks, window, cx))
+            .into_any_element()
+    }
+}
+
+impl gpui::EventEmitter<PaneEvent> for CellView {}
+
+/// Where a cell's presses go: its view, which emits each as a `PaneEvent`
 /// naming the Pane.
 #[derive(Clone)]
 pub(crate) struct PaneAsks {
-    part: WeakEntity<PartView>,
+    part: WeakEntity<CellView>,
     pane: PaneIdentity,
 }
 
 impl PaneAsks {
-    pub(crate) fn new(part: WeakEntity<PartView>, pane: PaneIdentity) -> Self {
+    fn new(part: WeakEntity<CellView>, pane: PaneIdentity) -> Self {
         Self { part, pane }
     }
 
@@ -156,111 +371,6 @@ impl PaneAsks {
     }
 }
 
-/// What a cell asks the window: its Pane's inputs, at the window's size.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CellAsk {
-    pub(crate) pane: PaneIdentity,
-    pub(crate) viewport: gpui::Size<Pixels>,
-}
-
-/// What a Pane's cell draws of the window rather than of its Pane.
-pub(crate) struct CellInputs {
-    /// The Pane's place on the roster this frame: its elements' ids and
-    /// selectors say it. A press names the Pane by `identity`.
-    pub(crate) index: usize,
-    pub(crate) identity: PaneIdentity,
-    /// The Pane itself, as the window holds it under `identity`.
-    pub(crate) view: Entity<PaneView>,
-    pub(crate) focused: bool,
-    /// The Pane's machine, while it is lost (ADR 0026).
-    pub(crate) lost: Option<MachineId>,
-    pub(crate) sheet_up: bool,
-    /// Native files hover this Pane, while their drag is live.
-    pub(crate) drop_target: bool,
-    /// The Composer's `/` or `@` menu, while it is up over this Pane.
-    pub(crate) composer_menu: Option<Entity<composer_menu::ComposerMenuView>>,
-    pub(crate) doors: Doors,
-    /// What a Main Composer's controls read; none on a Subagent's tab.
-    pub(crate) controls: Option<ControlsInputs>,
-    pub(crate) kind: KindInputs,
-}
-
-/// What the box's controls read of the window.
-pub(crate) struct ControlsInputs {
-    /// The `+` menu's focus, while it is up.
-    pub(crate) attach_focus: Option<FocusHandle>,
-    /// Where the `+` menu stands: over the Composer once it is laid out,
-    /// else over the window's bar.
-    pub(crate) attach_place: FloatPlace,
-    /// The plan-usage ring's popover is held open.
-    pub(crate) usage_popover_held: bool,
-    /// The operator's effort for the Pane's provider (Settings).
-    pub(crate) effort_default: Option<String>,
-}
-
-/// The menus the cell's controls open, each as its door (ADR 0043):
-/// whether it is up from that control, and where the control's bounds go
-/// for it to hang from. Each control drawn takes its own.
-#[derive(Default)]
-pub(crate) struct Doors {
-    /// A draft's band chips': Project, Workspace, where it runs.
-    pub(crate) bands: Vec<(pane::BandChip, MenuDoor)>,
-    /// An empty draft's hero word's: its Project menu.
-    pub(crate) hero: Option<MenuDoor>,
-    /// A Main Composer's model chip's: the model picker.
-    pub(crate) model: Option<MenuDoor>,
-    /// A Thread's mode chip's: the permission menu.
-    pub(crate) mode: Option<MenuDoor>,
-}
-
-impl Doors {
-    /// Band chip `chip`'s door.
-    pub(crate) fn band(&mut self, chip: pane::BandChip) -> Option<MenuDoor> {
-        let at = self.bands.iter().position(|(band, _)| *band == chip)?;
-        Some(self.bands.swap_remove(at).1)
-    }
-}
-
-/// A draft's or a Thread's own reads.
-pub(crate) enum KindInputs {
-    Draft(DraftInputs),
-    /// A Thread's, once the model has it.
-    Thread(Option<ThreadInputs>),
-}
-
-/// What a draft's band and hero read of the window.
-pub(crate) struct DraftInputs {
-    /// Its Project's title, `Project` until one is known.
-    pub(crate) project: SharedString,
-    /// The environment chip, while there is more than one environment to
-    /// choose or a copy to wait on.
-    pub(crate) environment: Option<(pane::ChipMark, SharedString)>,
-    /// Where it runs as a word, while no chip says: a machine's name.
-    pub(crate) machine: Option<String>,
-    /// The copy it waits on: whether that still runs.
-    pub(crate) copy_live: Option<bool>,
-    /// The mode a new Thread starts in (Settings).
-    pub(crate) mode: String,
-}
-
-/// What a Thread's cell reads of the window.
-pub(crate) struct ThreadInputs {
-    /// The Pane is the window's plane, not drawn by the Factory.
-    pub(crate) plane: bool,
-    /// Its Project's and branch's words, once its facts are known.
-    pub(crate) facts: Option<(Option<SharedString>, Option<SharedString>)>,
-    /// The Decision cards on its plane.
-    pub(crate) decisions: Option<Cards>,
-    /// Its details card stands beside the transcript when there is room
-    /// (`ThreadSurfaces::details_inline_open`).
-    pub(crate) details_inline_open: bool,
-    /// The details card's menu is up, choosing what the card shows.
-    pub(crate) details_menu_up: bool,
-    /// The slot's width as the board laid it out, for a test to read.
-    #[cfg(test)]
-    pub(crate) cell_width: f32,
-}
-
 /// What the details card's sections read of the window, asked only while
 /// the card stands: the Thread, the Subject its Pane shows, and how many
 /// pages of `Previous agents` it shows.
@@ -268,7 +378,7 @@ pub(crate) type DetailsRead<'a> = dyn Fn(ThreadKey, &Subject, usize, &gpui::App)
 
 /// The Pane's cell. While its machine is lost it is dimmed under a cover
 /// that takes every press until the machine is back (ADR 0026).
-pub(super) fn cell(
+fn cell(
     inputs: CellInputs,
     model: &Entity<Cockpit>,
     details: &DetailsRead,
@@ -280,7 +390,7 @@ pub(super) fn cell(
     let pane = inputs.view.clone();
     let cell = live_cell(inputs, &pane, model, details, asks, window, cx);
     match lost {
-        Some(machine) => machines::held(cell, format!("machine-lost-{}", machine.get())),
+        Some(machine) => held(cell, format!("machine-lost-{}", machine.get())),
         None => cell,
     }
 }
@@ -294,8 +404,8 @@ fn live_cell(
     window: &mut Window,
     cx: &mut App,
 ) -> Div {
-    #[cfg(test)]
-    drawn::built_pane(inputs.identity);
+    #[cfg(any(test, feature = "test-support"))]
+    testing::built_pane(inputs.identity);
     let sheet_up = inputs.sheet_up;
     let content = content(inputs, pane, model, details, asks, window, cx);
     if sheet_up {
@@ -306,7 +416,7 @@ fn live_cell(
     }
     let composer = pane.read(cx).composer.clone();
     let (hovered, dropped) = (asks.clone(), asks.clone());
-    ferrite_pane::prompt_drop::target(
+    crate::prompt_drop::target(
         content,
         composer,
         move |_, cx| dropped.ask(PaneAsk::FilesDropped, cx),
@@ -372,15 +482,15 @@ fn content(
             let start = doors
                 .hero
                 .take()
-                .and_then(|door| empty_board::draft_hero(&draft.project, pane, door, asks, cx))
+                .and_then(|door| hero::draft_hero(&draft.project, pane, door, asks, cx))
                 .filter(|_| !sheet_up);
             let toolbar = controls.as_ref().map(|controls| {
-                composer_footer::toolbar(
+                footer::toolbar(
                     index,
                     identity,
                     controls,
                     &mut doors,
-                    composer_footer::Kind::Draft(&draft),
+                    footer::Kind::Draft(&draft),
                     pane,
                     model,
                     asks,
@@ -413,7 +523,7 @@ fn content(
     let cell = cell.debug_selector(move || format!("view-thread-{}", thread.thread().get()));
     // Over a link, the roster can list a Thread a frame before its facts
     // land: the cell stays an empty shell until they do.
-    let Some(inputs) = thread_inputs else {
+    let Some(mut inputs) = thread_inputs else {
         return cell;
     };
     let retained_transcript = pane.read(cx).transcript().map(|transcript| {
@@ -434,11 +544,8 @@ fn content(
     // The docked Decision merges into the Composer when that Composer is a
     // live block with nothing floating between them (rule 2.8.1).
     let joins = pane.read(cx).is_main() && attachments.is_none();
-    let activity_decisions = inputs
-        .decisions
-        .as_ref()
-        .and_then(|cards| cards.render(window, cx));
-    let details_card = details::card(
+    let activity_decisions = inputs.decisions.take().and_then(|draw| draw(window, cx));
+    let details_card = crate::details::card(
         thread,
         pane,
         (inputs.details_inline_open, inputs.details_menu_up),
@@ -447,12 +554,12 @@ fn content(
         cx,
     );
     let toolbar = controls.as_ref().map(|controls| {
-        composer_footer::toolbar(
+        footer::toolbar(
             index,
             identity,
             controls,
             &mut doors,
-            composer_footer::Kind::Thread(thread, &inputs),
+            footer::Kind::Thread(thread, &inputs),
             pane,
             model,
             asks,
@@ -480,16 +587,15 @@ fn content(
         decision_joined: joins && activity_decisions.is_some(),
         thread: open,
     };
-    #[cfg(test)]
-    drawn::record_pane(
+    #[cfg(any(test, feature = "test-support"))]
+    testing::record_pane(
         identity,
-        drawn::Pane {
+        testing::Drawn {
             focused,
             unread: facts.unread,
             drop_target: facts.drop_target,
             editing: facts.editing,
             reduce_motion: facts.reduce_motion,
-            cell_width: inputs.cell_width,
             clock: open.turn().elapsed().map(ferrite_core::progress::live_seconds),
         },
     );
@@ -499,13 +605,13 @@ fn content(
         menu,
         activity_decisions,
         details: details_card,
-        details_lane_width: details::lane_width(&pane.read(cx).details, inputs.details_inline_open),
+        details_lane_width: crate::details::lane_width(&pane.read(cx).details, inputs.details_inline_open),
         toolbar,
         resume_offer,
         // An empty Thread wears the draft's start card until its first
         // prompt.
         start: if pane.read(cx).is_main() && open.transcript().blocks().is_empty() {
-            empty_board::thread_hero(inputs.facts.as_ref()).filter(|_| !sheet_up)
+            hero::thread_hero(inputs.facts.as_ref()).filter(|_| !sheet_up)
         } else {
             None
         },
@@ -551,4 +657,68 @@ fn slot_drop_target(cell: Div, asks: &PaneAsks) -> Div {
         })
     }))
     .on_drop(asks.on(|drag: &PaneDrag, _, _| Some(PaneAsk::SlotDropped { source: drag.leaf })))
+}
+
+/// What a lost machine still shows (ADR 0026): `element` dimmed under a
+/// cover, `id`, that takes every press until the machine is back.
+fn held(element: Div, id: impl Into<SharedString>) -> Div {
+    let id: SharedString = id.into();
+    let selector = id.clone();
+    element
+        .relative()
+        .opacity(ferrite_ui::theme::MACHINE_LOST_OPACITY)
+        .child(
+            div()
+                .id(gpui::ElementId::Name(id))
+                .debug_selector(move || selector.to_string())
+                .absolute()
+                .inset_0()
+                .occlude(),
+        )
+}
+
+/// What each Pane's cell last drew and how often each was built: the
+/// window's stale-chrome tests read what is on screen, not the model, and
+/// its frame budgets count the work each cell did.
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use ferrite_core::roster::PaneIdentity;
+
+    /// What a Pane's cell drew of itself.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct Drawn {
+        pub focused: bool,
+        pub unread: bool,
+        pub drop_target: bool,
+        pub editing: bool,
+        pub reduce_motion: bool,
+        /// The working clock its lines read (`12s`).
+        pub clock: Option<String>,
+    }
+
+    thread_local! {
+        static PANES: RefCell<HashMap<PaneIdentity, Drawn>> = RefCell::new(HashMap::new());
+        static PANE_RENDERS: RefCell<HashMap<PaneIdentity, usize>> = RefCell::new(HashMap::new());
+    }
+
+    pub(crate) fn built_pane(identity: PaneIdentity) {
+        PANE_RENDERS.with(|renders| *renders.borrow_mut().entry(identity).or_default() += 1);
+    }
+
+    pub(crate) fn record_pane(identity: PaneIdentity, drawn: Drawn) {
+        PANES.with(|panes| panes.borrow_mut().insert(identity, drawn));
+    }
+
+    /// Pane `identity`'s cell as last drawn, once it has been.
+    pub fn drawn(identity: PaneIdentity) -> Option<Drawn> {
+        PANES.with(|panes| panes.borrow().get(&identity).cloned())
+    }
+
+    /// How many times this Pane's cell has been built on this thread.
+    pub fn pane_renders(identity: PaneIdentity) -> usize {
+        PANE_RENDERS.with(|renders| renders.borrow().get(&identity).copied().unwrap_or(0))
+    }
 }

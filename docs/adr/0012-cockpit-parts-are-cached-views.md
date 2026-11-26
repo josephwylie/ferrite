@@ -15,11 +15,11 @@ hover sweep built each Pane 135 times in 5s.
 ## Decision
 
 - Under the loops overlay the nav's rows and each Pane's cell are a cached
-  view of their own, `PartView` (`cockpit/parts.rs`), mounted in the box the
-  Cockpit's layout gave the inline part. A Pane's part reads what its cell
-  draws of the window through a `Source` on the Cockpit (`cell_inputs`) and
-  draws the cell in its own context (`pane_cell`); a press in it emits a
-  `PaneEvent` naming the Pane, which the Cockpit hears. It tracks what it
+  view of their own (`cockpit/parts.rs`), mounted in the box the Cockpit's
+  layout gave the inline part. A Pane's part, `ferrite_pane::cell::CellView`,
+  reads what its cell draws of the window through a `Source` on the Cockpit
+  (`cell_inputs`) and draws the cell in its own context, below the shell; a
+  press in it emits a `PaneEvent` naming the Pane, which the Cockpit hears. It tracks what it
   reads (vendored gpui, `tracking_reads`), the Cockpit included.
 - Conservative by default: every part reads the Cockpit, so the Cockpit's
   own notify still rebuilds them all. Only the hot paths are precise:

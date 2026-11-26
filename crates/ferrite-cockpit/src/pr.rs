@@ -10,21 +10,10 @@
 
 use std::time::{Duration, Instant};
 
-use ferrite_core::pull_request::{PrState, PullRequest};
+use ferrite_core::pull_request::PullRequest;
 
 /// The least time between two automatic readings of one Thread's PR.
 pub const AUTO_EVERY: Duration = Duration::from_secs(30);
-
-/// Where a pull request stands, in one word: the Overview's PR row and
-/// the details card's tooltip.
-pub(crate) fn state_word(pr: &PullRequest) -> &'static str {
-    match (pr.state, pr.draft) {
-        (PrState::Merged, _) => "Merged",
-        (PrState::Closed, _) => "Closed",
-        (PrState::Open, true) => "Draft",
-        (PrState::Open, false) => "Open",
-    }
-}
 
 /// One Thread's PR: the last reading, and whether another is on its way.
 #[derive(Debug, Default)]

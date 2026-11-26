@@ -641,7 +641,7 @@ write, its focus and scroll, its density measurements, and where its
 canvas, card and opener were laid out. Whether it stands beside the
 transcript, and whether its `Previous agents` is unfolded, are the
 Thread's saved Surfaces (`details_inline_open`, `previous_agents_open`). Its rows the root builds in `details_content`
-into plain values that draw themselves (`cockpit/details/content.rs`); a
+into plain values that draw themselves (`ferrite_pane::details::content`); a
 watched PR's eye is one more value on its `PrBlock`, the watch's URL from
 the Thread's digest (`Facts::watched_pr`), and its press calls the root's
 `watch_pr` (`cockpit/pr_watching.rs`), as the palette and the PR's context
@@ -873,7 +873,7 @@ are the popup slot's (`Popup::Attach`, `Popup::Mode`). The root reads the
 Pane's Thread once as it builds the toolbar (`composer_toolbar`): whether
 its turn runs and its line is empty, its queue, its MCP servers and
 plugins, its permission modes and mode. The controls are drawn from what
-was read (`cockpit/composer_footer.rs`: `queue_acts`, `send_button`,
+was read (`ferrite_pane::cell::footer`: `queue_acts`, `send_button`,
 `stop_button`, `AttachMenu::of`, `ModeChip::of`, `draft_mode_word`; and
 `ModeSegments` in `mode_menu.rs`). Every press acts through the root, as
 before: the submit, the interrupt, a queued message's act, opening the `+`

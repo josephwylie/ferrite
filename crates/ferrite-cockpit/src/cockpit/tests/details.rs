@@ -1,4 +1,5 @@
-//! The Thread details card (`cockpit/details.rs`): the Thread's lightweight
+//! The Thread details card (`ferrite_pane::details`, opened and shut by
+//! `cockpit/details.rs`): the Thread's lightweight
 //! context, reachable beside the tool the Panel holds, with its own
 //! visibility, focus and dismissal.
 use super::*;

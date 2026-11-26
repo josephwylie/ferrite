@@ -75,9 +75,9 @@ impl Popup {
     fn owns(&self, at: Point<Pixels>, triggers: &Triggers) -> bool {
         let hit = |key: &str| triggers.hit(key, at);
         match self {
-            Popup::Mode(menu) => hit(&mode_menu::chip_trigger(menu.thread)),
+            Popup::Mode(menu) => hit(&ferrite_pane::cell::mode_chip_trigger(menu.thread)),
             Popup::ModelPicker(picker) => {
-                hit(&model_picker::chip_trigger(picker.pane))
+                hit(&ferrite_pane::cell::model_chip_trigger(picker.pane))
                     || picker.mode.is_some() && hit(PICKER_MODE)
             }
             Popup::Band(menu) => hit(&menu.kind.trigger()),

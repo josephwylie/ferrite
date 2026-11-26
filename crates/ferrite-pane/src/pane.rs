@@ -124,7 +124,7 @@ pub struct PaneView {
     /// the Pane summons can hang off the Composer's edge or the head and
     /// stay inside the card (`card_corner`), whatever the pointer did.
     pub geometry: std::rc::Rc<std::cell::Cell<PaneGeometry>>,
-    /// The Thread details card over the transcript (`cockpit/details.rs`).
+    /// The Thread details card over the transcript (`details::card`).
     pub details: crate::details::DetailsCard,
 }
 

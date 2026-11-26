@@ -48,6 +48,17 @@ pub(crate) enum SurfaceId {
     PullRequest(u64),
 }
 
+impl From<ferrite_pane::cell::DetailsOpen> for SurfaceId {
+    fn from(open: ferrite_pane::cell::DetailsOpen) -> Self {
+        use ferrite_pane::cell::DetailsOpen;
+        match open {
+            DetailsOpen::PullRequest(number) => Self::PullRequest(number),
+            DetailsOpen::Changes => Self::Changes,
+            DetailsOpen::SideChat(tab) => Self::SideChat(tab),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Close {
     /// Nothing outlives the tab but its identity: the Surface reads what it

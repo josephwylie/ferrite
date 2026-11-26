@@ -4,14 +4,126 @@
 //! view): what they keep is the Pane's own (its Composer) and the popup
 //! slot's (the `+` menu's focus, `Popup::Attach`; the mode menu,
 //! `Popup::Mode`), and what they show is the Thread's, which the root reads
-//! (`pane_cell::ControlsInputs`). Here they are drawn from what was read;
-//! each press asks the root by a `PaneEvent` (`pane_cell::PaneAsk`).
+//! (`ControlsInputs`). Here they are drawn from what was read;
+//! each press asks the root by a `PaneEvent` (`PaneAsk`).
+//!
+//! With them, the words and reads they draw with: whether a turn runs, why
+//! its model cannot change now, the plugins its `+` menu lists, and the
+//! effort a chip says.
 
-use super::pane_cell::{ControlsInputs, Doors, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
-use super::*;
-use ferrite_ui::components::MenuDoor;
-use gpui::App;
+use ferrite_client::cockpit::{Cockpit, ThreadView};
+use ferrite_core::provider::Provider;
+use ferrite_core::roster::PaneIdentity;
+use ferrite_core::ThreadKey;
+use gpui::prelude::*;
+use gpui::{div, px, AnyElement, App, Div, Entity, FocusHandle, Focusable, MouseButton, SharedString, Window};
+
+use crate::pane::{self, PaneView};
+use ferrite_core::draft::DraftTarget;
 use ferrite_core::{ControlKind, McpStatus, SessionControl};
+use ferrite_ui::components::{MenuDoor, Tip as _};
+use ferrite_ui::provider::effort_title;
+
+use super::{ControlsInputs, Doors, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
+
+pub const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
+pub const TUNING_PENDING_HINT: &str = "Available once the last change is accepted";
+
+/// Whether a turn runs on this Thread for the stop affordances: from the
+/// moment a prompt is sent — before the provider's first event, which
+/// `busy` waits for — through a starting Session to the turn's end. The
+/// Composer reads it (`pane::primary_actions`), so a way to stop is in view
+/// from the first frame.
+pub fn turn_running(open: &ThreadView) -> bool {
+    open.busy() || open.operator_turn()
+}
+
+/// Why a Thread's model and effort cannot change now, in the words the
+/// pickers show; `None` while they can.
+pub fn tuning_hold(open: &ThreadView) -> Option<&'static str> {
+    if open.busy() {
+        Some(TUNING_BUSY_HINT)
+    } else if open.tuning() {
+        Some(TUNING_PENDING_HINT)
+    } else {
+        None
+    }
+}
+
+/// The plugins a Session's commands come from, each with its commands,
+/// in their first command's order: what the provider says is a plugin's
+/// (`CommandSource::Plugin`).
+pub fn plugins(
+    commands: &[ferrite_core::SessionCommand],
+) -> Vec<(String, Vec<&ferrite_core::SessionCommand>)> {
+    let mut plugins: Vec<(String, Vec<&ferrite_core::SessionCommand>)> = Vec::new();
+    for command in commands {
+        let Some(plugin) = command.source.as_ref().and_then(|source| source.plugin()) else {
+            continue;
+        };
+        match plugins.iter_mut().find(|(name, _)| name == plugin) {
+            Some((_, listed)) => listed.push(command),
+            None => plugins.push((plugin.to_string(), vec![command])),
+        }
+    }
+    plugins
+}
+
+/// An effort level as its Composer chip reads it: the title, lowercase
+/// (`high`, `extra high`) — the chip is a quiet control, the menu rows keep
+/// their titles.
+pub fn effort_chip_label(effort: &str) -> SharedString {
+    SharedString::from(effort_title(effort).to_lowercase())
+}
+
+/// The effort a chip shows (rule 2.6.5): the Thread's or draft's own
+/// choice, else the operator's saved default, else the model row's own
+/// default (`medium` for Codex). `None` when nothing resolves: a Thread's
+/// chip then hides rather than reading the bare word `effort` (`/effort`
+/// still reaches the picker), and a draft's band chip reads `default`.
+fn effort_value(
+    chosen: Option<&str>,
+    saved: Option<&str>,
+    provider: Provider,
+    model: Option<&str>,
+    announced: &[ferrite_core::ModelInfo],
+) -> Option<SharedString> {
+    if let Some(effort) = chosen.or(saved) {
+        return Some(effort_chip_label(effort));
+    }
+    let rows = ferrite_core::models::catalog(provider, announced);
+    let row = match model {
+        Some(model) => rows.iter().find(|row| row.is(model)),
+        None => rows.first(),
+    };
+    row.and_then(|row| row.default_effort.as_deref())
+        .map(effort_chip_label)
+}
+
+/// The effort in force (FL-13): the chip's word (`effort_value`), else the
+/// level the CLI itself runs at (`models::cli_default_effort`).
+pub fn effort_in_force(
+    chosen: Option<&str>,
+    saved: Option<&str>,
+    provider: Provider,
+    model: Option<&str>,
+    announced: &[ferrite_core::ModelInfo],
+) -> Option<SharedString> {
+    effort_value(chosen, saved, provider, model, announced).or_else(|| {
+        ferrite_core::models::cli_default_effort(provider, model).map(effort_chip_label)
+    })
+}
+
+/// The effort in force on an open Thread (`medium`): its own choice, else
+/// the operator's default (`saved`), else its model's (`effort_in_force`);
+/// `None` for a model that takes none.
+fn thread_effort(open: &ThreadView, saved: Option<&str>) -> Option<SharedString> {
+    let provider = open.provider();
+    let ladder = ferrite_core::models::efforts_for(provider, open.model(), open.models());
+    (!ladder.is_empty())
+        .then(|| effort_in_force(open.effort(), saved, provider, open.model(), open.models()))
+        .flatten()
+}
 
 /// Whose box the controls are: a draft's, with its band, or a Thread's.
 pub(super) enum Kind<'a> {
@@ -227,7 +339,7 @@ fn band_chips(
     // Why Send is not there, beside the copy's chip, while it waits on a
     // copy.
     if let Some(live) = inputs.copy_live {
-        chips.insert(1, draft_environment::copy_waits_note(live).into_any_element());
+        chips.insert(1, copy_waits_note(live).into_any_element());
     }
     chips
 }
@@ -266,7 +378,7 @@ fn draft_model_chip(
             )
         })
         .flatten();
-    let group = model_picker::chip_trigger(identity);
+    let group = crate::cell::model_chip_trigger(identity);
     let picker_up = door.up();
     let face = pane::model_effort_chip(pane::ModelChip {
         mark: ferrite_ui::provider::mark(provider),
@@ -283,7 +395,7 @@ fn draft_model_chip(
         cx,
     )
     .tip_unless_open(picker_up, "Model and effort");
-    Some(model_picker::chip_control(identity, control, door, asks))
+    Some(chip_control(identity, control, door, asks))
 }
 
 /// The Thread's model chip: the model it runs and the effort in force,
@@ -319,13 +431,13 @@ fn model_chip(
         effort: effort.map(|effort| pane::sentence_case(&effort).into()),
         loading: open.starting(),
         open: picker_up,
-        group: model_picker::chip_trigger(identity),
+        group: crate::cell::model_chip_trigger(identity),
     });
     let control = pane::toolbar_chip(("model-picker", key), cx)
         .debug_selector(move || format!("model-picker-{key}"))
         .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
         .child(face);
-    Some(model_picker::chip_control(identity, control, door, asks))
+    Some(chip_control(identity, control, door, asks))
 }
 
 /// The queue strip's acts on `thread`'s Pane, each row's own, aimed at its
@@ -708,4 +820,40 @@ pub(super) fn draft_mode_word(index: usize, mode: &str) -> AnyElement {
         .tooltip(ferrite_ui::menu::tooltip("Permission mode"))
         .child(pane::mode_chip(label, mode))
         .into_any_element()
+}
+
+/// A model chip as a control: a press asks for its Pane's picker, or its
+/// shutting (`PaneAsk::ModelPicker`), and the chip records where it stands
+/// for the picker to hang from. The press stops there, so the root's
+/// dismissal never undoes it.
+fn chip_control(
+    identity: PaneIdentity,
+    chip: gpui::component::button::Button,
+    door: ferrite_ui::components::MenuDoor,
+    asks: &PaneAsks,
+) -> AnyElement {
+    let chip = chip
+        .group(crate::cell::model_chip_trigger(identity))
+        .on_mouse_down(MouseButton::Left, asks.press(crate::cell::PaneAsk::ModelPicker));
+    door.hung(div().flex().min_w_0().child(chip)).into_any_element()
+}
+
+/// Why a draft waiting on its copy has no Send, beside the copy's chip:
+/// it sends once copied, or its copy stopped short, until the operator
+/// resumes it or picks where the draft runs.
+fn copy_waits_note(running: bool) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .flex_shrink(1.)
+        .h(px(ferrite_ui::theme::FOOTER_CHIP_H))
+        .px(px(ferrite_ui::theme::FOOTER_CHIP_PAD_X))
+        .debug_selector(|| "band-copy-waits".into())
+        .child(
+            ferrite_ui::components::text_ui()
+                .truncate()
+                .text_color(gpui::rgb(ferrite_ui::theme::INK_SUBTLE))
+                .child(if running { "Send once copied" } else { "Copy stopped" }),
+        )
 }
