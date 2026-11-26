@@ -426,6 +426,76 @@ fn the_hub_carries_one_machines_change_to_another() {
     assert_eq!(sync(&to_other, &other), Synced::default());
 }
 
+/// Claude's and Codex's sign-ins, by their paths from the home folder.
+const SIGN_INS: [&str; 2] = [".claude/.credentials.json", ".codex/auth.json"];
+
+/// Each computer keeps its own sign-in: two homes signed in to different
+/// accounts sync, and each still has its own Claude and Codex sign-in byte
+/// for byte, a side with none is given none, nothing asks whose to keep,
+/// and the rest of the setup syncs.
+#[test]
+fn each_computer_keeps_its_own_sign_in_and_the_rest_syncs() {
+    let world = World::new("own-sign-ins");
+    let (mine, far) = (world.home("here"), world.home("machine"));
+    put(&mine, ".claude/CLAUDE.md", "Be careful.\n");
+    put(&mine, ".claude/settings.json", r#"{"model": "opus"}"#);
+    put(&far, ".claude/commands/there.md", "Made there.\n");
+    put(&mine, ".claude/.credentials.json", &format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}-here"}}}}"#));
+    put(&far, ".claude/.credentials.json", &format!(r#"{{"claudeAiOauth": {{"accessToken": "{SECRET}-there"}}}}"#));
+    put(&mine, ".codex/auth.json", &format!(r#"{{"tokens": {{"access_token": "{SECRET}-here"}}}}"#));
+    let sign_ins = |home: &Home| SIGN_INS.map(|path| fs::read(at(home, path)).ok());
+    let (here_before, there_before) = (sign_ins(&mine), sign_ins(&far));
+    let job = world.job(&mine, "far");
+
+    let synced = sync(&job, &far);
+    assert_eq!(synced.held, BTreeMap::new(), "nothing asks whose sign-in to keep: {synced:?}");
+    assert_eq!(sign_ins(&mine), here_before, "this computer's own, as it was");
+    assert_eq!(sign_ins(&far), there_before, "the Machine's own, and none given it");
+    assert_eq!(read(&far, ".claude/CLAUDE.md").as_deref(), Some("Be careful.\n"));
+    let settings: serde_json::Value = serde_json::from_str(&read(&far, ".claude/settings.json").unwrap()).unwrap();
+    assert_eq!(settings["model"], "opus");
+    assert_eq!(read(&mine, ".claude/commands/there.md").as_deref(), Some("Made there.\n"));
+
+    assert_eq!(sync(&job, &far), Synced::default(), "nothing differs now");
+    assert_eq!((sign_ins(&mine), sign_ins(&far)), (here_before, there_before));
+    assert!(!world.root.join("settings").join(TRASH).exists() && !trash_of(&far).exists() && !job.conflicts.exists());
+}
+
+/// A base written by table 3, which synced sign-ins, names each one as
+/// both sides agreed on it then, and so would one written by this table.
+/// Since, each side signed in again or out: nothing is moved, removed or
+/// put back, on either side.
+#[test]
+fn a_base_that_names_a_sign_in_moves_and_removes_none() {
+    for table in [3, TABLE] {
+        let world = World::new(&format!("sign-in-base-{table}"));
+        let (mine, far) = (world.home("here"), world.home("machine"));
+        let signed_in = |account: &str| format!(r#"{{"accessToken": "{SECRET}-{account}"}}"#);
+        for home in [&mine, &far] {
+            put(home, ".claude/CLAUDE.md", "Be careful.\n");
+        }
+        for path in SIGN_INS {
+            put(&mine, path, &signed_in("agreed"));
+        }
+        let agreed = tree::Manifest {
+            entries: [".claude/CLAUDE.md", SIGN_INS[0], SIGN_INS[1]].map(|path| (path.to_string(), first_table_entry(&mine, path))).into(),
+            ..tree::Manifest::default()
+        };
+        let job = world.job(&mine, "far");
+        fs::create_dir_all(&job.dir).unwrap();
+        fs::write(job.dir.join(BASE), serde_json::to_vec(&serde_json::json!({"table": table, "agreed": agreed})).unwrap()).unwrap();
+        put(&mine, SIGN_INS[0], &signed_in("here-again"));
+        gone(&mine, SIGN_INS[1]);
+        put(&far, SIGN_INS[1], &signed_in("there-again"));
+        let (here, there) = (own_files(&mine), own_files(&far));
+
+        let synced = sync(&job, &far);
+        assert_eq!((synced.changed(), synced.held.len()), (0, 0), "table {table}: {synced:?}");
+        assert_eq!(own_files(&mine), here, "table {table}: this computer as it was");
+        assert_eq!(own_files(&far), there, "table {table}: the Machine as it was");
+    }
+}
+
 /// macOS's Keychain, as a map.
 #[derive(Default)]
 struct Fake(Mutex<BTreeMap<String, String>>, std::sync::atomic::AtomicUsize);
