@@ -3,7 +3,8 @@ use crate::cockpit::model_picker::Picked;
 
 /// A background task can park a Thread without going through this window's
 /// close action. The surviving Pane must keep the keyboard and the same draft
-/// even when that removal changes its index in the core roster.
+/// even when that removal changes its index in the core roster: the same
+/// Pane, its caret where it was left, its transcript scrolled where it was.
 #[gpui::test]
 fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-background-close", 3);
@@ -13,8 +14,41 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
     tick(cx);
-    cx.simulate_input("keep this draft");
+    fake.streams.borrow()[2]
+        .send(SessionEvent::TextDelta {
+            text: (0..80).map(|n| format!("Answer line {n}\n\n")).collect(),
+        })
+        .unwrap();
+    fake.streams.borrow()[2]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
     tick(cx);
+    let scroll = view.read_with(cx, |view, cx| {
+        let pane = &view.panes[view.pane_for(threads[2]).unwrap()];
+        pane.transcript().unwrap().read(cx).scroll().clone()
+    });
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll.bounds().center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(600.))),
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: gpui::TouchPhase::default(),
+    });
+    assert!(!scroll.is_following_tail(), "the premise: scrolled away");
+    cx.simulate_input("keep this draft");
+    cx.simulate_keystrokes("left left left left left");
+    tick(cx);
+    let pane = |view: &CockpitView, cx: &gpui::App| {
+        let at = view.pane_for(threads[2]).unwrap();
+        let pane = &view.panes[at];
+        let transcript = pane.transcript().unwrap();
+        let offset = transcript.read(cx).scroll().offset().y;
+        (at, pane.composer.entity_id(), pane.composer.read(cx).cursor(), transcript.entity_id(), offset)
+    };
+    let before = view.read_with(cx, |view, cx| pane(view, cx));
+    assert_eq!(before.2, "keep this draft".len() - 5, "the premise: the caret left the end");
 
     // Exercise the core mutation seen from the Server, without the UI close
     // action (which already synchronizes its mirror).
@@ -27,6 +61,12 @@ fn composer_survives_background_thread_removal(cx: &mut TestAppContext) {
         );
     });
     tick(cx);
+    let after = view.read_with(cx, |view, cx| pane(view, cx));
+    assert_ne!(after.0, before.0, "the premise: the Pane moved along the roster");
+    assert_eq!(after.1, before.1, "the same Composer");
+    assert_eq!(after.2, before.2, "the caret where it was left");
+    assert_eq!(after.3, before.3, "the same transcript");
+    assert_eq!(after.4, before.4, "scrolled where it was");
     let editor = cx
         .debug_bounds("focused-prompt-editor")
         .expect("the visible editor still owns focus after another Thread parks");
