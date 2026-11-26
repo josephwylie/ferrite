@@ -78,7 +78,7 @@ fn the_composers_sends_go_in_order_and_none_waits(cx: &mut gpui::TestAppContext)
     let asked = || -> Vec<waits::Wait> {
         waits::take().into_iter().filter(|wait| ["send", "queue"].contains(&wait.op.as_str())).collect()
     };
-    let on_the_way = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.outbox.count(thread));
+    let on_the_way = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.sends.on_the_way(thread));
     waits::start();
     for words in ["one", "two"] {
         cx.simulate_input(words);
@@ -123,7 +123,7 @@ fn a_prompt_sent_again_does_not_wait_and_hears_where_it_went(cx: &mut gpui::Test
     until(cx, |_| heard.borrow().is_some());
     // The fixture Server's Thread has no agent to queue behind.
     assert_eq!(*heard.borrow(), Some(Err("The agent's queue did not take it.".into())));
-    assert_eq!(view.read_with(cx, |view, _| view.outbox.count(thread)), 0);
+    assert_eq!(view.read_with(cx, |view, _| view.sends.on_the_way(thread)), 0);
 }
 
 /// The Turn and Session presses whose reply the window reads are asked,

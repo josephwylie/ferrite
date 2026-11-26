@@ -262,7 +262,7 @@ fn a_held_send_keeps_two_machines_threads_apart(cx: &mut TestAppContext) {
             .update(cx, |composer, cx| composer.take_draft(cx));
         let (prompt, whole) = (draft.prompt().to_string(), draft.content().clone());
         view.hold_queued(there, draft);
-        assert_eq!((view.held_sends.count(here), view.held_sends.count(there)), (0, 1));
+        assert_eq!((view.sends.held(here), view.sends.held(there)), (0, 1));
         assert_eq!(
             view.recovered_content(here, prompt.clone()),
             DraftContent::from_prompt(prompt.clone()),
@@ -364,7 +364,7 @@ fn held_count(
     thread: ThreadKey,
     cx: &mut gpui::VisualTestContext,
 ) -> usize {
-    view.read_with(cx, |view, _| view.held_sends.count(thread))
+    view.read_with(cx, |view, _| view.sends.held(thread))
 }
 
 #[gpui::test]

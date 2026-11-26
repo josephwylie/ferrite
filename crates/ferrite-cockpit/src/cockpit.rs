@@ -331,11 +331,9 @@ pub struct CockpitView {
     selection: TranscriptText,
     /// Every Thread's side chat, a body of the Panel.
     side_chat: Entity<ferrite_prs::side_chat::SideChatView>,
-    /// Drafts sent while a Session was starting, kept whole until it takes
-    /// the prompt or hands it back.
-    held_sends: sends::HeldSends,
-    /// The Composer drafts on their way to each Thread (`sends`).
-    outbox: sends::Outbox,
+    /// The Composer's prompts from ↵ until their Thread takes them: on
+    /// their way, or held while a Session starts (`sends`).
+    sends: sends::Sends,
     /// What follows each Server answer the window waits for (`asks`).
     awaited: asks::Awaited,
     /// The prompts asked back to a Composer and not yet answered
@@ -832,8 +830,7 @@ impl CockpitView {
             branch_reads: Default::default(),
             selection: TranscriptText::default(),
             side_chat,
-            held_sends: Default::default(),
-            outbox: Default::default(),
+            sends: Default::default(),
             awaited: Default::default(),
             returning: Default::default(),
             tools: tools::Tools::new(files, terminals, changes),
@@ -1138,10 +1135,10 @@ impl CockpitView {
         self.poll_environment(cx);
         self.apply_thread_rules(&frame, cx);
         self.settle_asks(cx);
-        self.settle_held_sends(cx);
+        self.sends.settle_held(self.cockpit.read(cx));
         for index in 0..self.panes.len() {
             if let Some(thread) = self.panes[index].thread() {
-                for draft in self.lost_sends(thread) {
+                for draft in self.sends.take_lost(thread) {
                     self.put_back_send(index, draft, true, cx);
                 }
             }

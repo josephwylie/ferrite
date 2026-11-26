@@ -8,7 +8,7 @@
 //! switching or closing the Pane does not lose it.
 //!
 //! The window never waits for the admission (ADR 0041). A sent draft is
-//! on its way in the `Outbox` until the Server answers; a Thread's drafts
+//! on its way in `Sends` until the Server answers; a Thread's drafts
 //! go one at a time, in the order sent, so each is sent or queued by what
 //! the Thread is doing once the one before it is settled. A prompt sent
 //! again (`send_again`) goes the same way, with no draft to settle: what
@@ -27,9 +27,16 @@ use std::collections::{HashMap, VecDeque};
 /// How much of a prompt names it in a notice.
 const NAMED_CHARS: usize = 48;
 
-/// The drafts each Thread's Engine is holding for its Session, oldest first.
+/// Every Thread's prompts from ↵ until the Thread takes them: those on
+/// their way, oldest first (the first is asked of the Server, the rest
+/// wait for its answer), and the drafts its Engine holds for a Session
+/// still starting, oldest first, kept whole until the Session takes the
+/// prompt or hands it back.
 #[derive(Default)]
-pub(crate) struct HeldSends(HashMap<ThreadKey, Vec<Held>>);
+pub(crate) struct Sends {
+    on_the_way: HashMap<ThreadKey, VecDeque<Outgoing>>,
+    held: HashMap<ThreadKey, Vec<Held>>,
+}
 
 struct Held {
     draft: SentDraft,
@@ -40,11 +47,6 @@ struct Held {
     /// with the Session, so the draft is all that is left of it.
     lost: bool,
 }
-
-/// The prompts on their way to each Thread, oldest first: the first is
-/// asked of the Server, the rest wait for its answer.
-#[derive(Default)]
-pub(crate) struct Outbox(HashMap<ThreadKey, VecDeque<Outgoing>>);
 
 struct Outgoing {
     /// The prompt as sent: a draft's, trimmed.
@@ -63,10 +65,105 @@ enum Origin {
 /// What follows a prompt sent again: where it went, or why it did not.
 type Replayed = Box<dyn FnOnce(&mut CockpitView, Result<Handoff, String>, &mut Context<CockpitView>)>;
 
-impl Outbox {
+impl Sends {
+    /// `outgoing` joins `thread`'s prompts on their way. Whether it is the
+    /// first, to be asked of the Server now.
+    fn send(&mut self, thread: ThreadKey, outgoing: Outgoing) -> bool {
+        let waiting = self.on_the_way.entry(thread).or_default();
+        waiting.push_back(outgoing);
+        waiting.len() == 1
+    }
+
+    /// The text of `thread`'s oldest prompt on its way, to ask. With none
+    /// left, the Thread has none on its way.
+    fn next(&mut self, thread: ThreadKey) -> Option<String> {
+        let next = self
+            .on_the_way
+            .get(&thread)
+            .and_then(|waiting| waiting.front())
+            .map(|next| next.text.clone());
+        if next.is_none() {
+            self.on_the_way.remove(&thread);
+        }
+        next
+    }
+
+    /// `thread`'s oldest prompt on its way, answered: where it came from.
+    fn answered(&mut self, thread: ThreadKey) -> Option<Origin> {
+        self.on_the_way
+            .get_mut(&thread)
+            .and_then(VecDeque::pop_front)
+            .map(|Outgoing { from, .. }| from)
+    }
+
+    /// Keep `held` under `thread`, after the drafts it holds already.
+    fn hold(&mut self, thread: ThreadKey, held: Held) {
+        self.held.entry(thread).or_default().push(held);
+    }
+
+    /// The draft `thread` held, when `prompt` is that prompt handed back by
+    /// a Session that never started.
+    fn take_held(&mut self, thread: ThreadKey, prompt: &str) -> Option<SentDraft> {
+        let held = self.held.get_mut(&thread)?;
+        let at = held
+            .iter()
+            .position(|held| held.draft.prompt().trim() == prompt.trim())?;
+        let held = held.remove(at).draft;
+        if self.held.get(&thread).is_some_and(Vec::is_empty) {
+            self.held.remove(&thread);
+        }
+        Some(held)
+    }
+
+    /// Follow each held draft with its prompt: one the Session took is let
+    /// go, one still waiting or handed back and not yet collected is kept,
+    /// and one whose Thread closed under it is marked lost. A deleted
+    /// Thread's go.
+    pub(super) fn settle_held(&mut self, cockpit: &Cockpit) {
+        self.held.retain(|&thread, held| {
+            let Some(view) = cockpit.thread(thread) else {
+                if cockpit.peek(thread).is_err() {
+                    return false;
+                }
+                held.iter_mut().for_each(|held| held.lost = true);
+                return true;
+            };
+            let waiting = view.queue();
+            let handed_back = view.recovered().is_some();
+            held.retain_mut(|held| {
+                let here = waiting
+                    .iter()
+                    .any(|queued| queued.text.trim() == held.draft.prompt().trim());
+                held.listed |= here;
+                here || handed_back || !held.listed || held.lost
+            });
+            !held.is_empty()
+        });
+    }
+
+    /// The drafts `thread` lost when it closed with a prompt held.
+    pub(super) fn take_lost(&mut self, thread: ThreadKey) -> Vec<SentDraft> {
+        let Some(held) = self.held.get_mut(&thread) else {
+            return Vec::new();
+        };
+        let (lost, kept) = std::mem::take(held).into_iter().partition(|held| held.lost);
+        *held = kept;
+        if held.is_empty() {
+            self.held.remove(&thread);
+        }
+        lost.into_iter().map(|held: Held| held.draft).collect()
+    }
+
+    /// How many of `thread`'s prompts are on their way.
     #[cfg(test)]
-    pub(crate) fn count(&self, thread: ThreadKey) -> usize {
-        self.0.get(&thread).map_or(0, VecDeque::len)
+    pub(crate) fn on_the_way(&self, thread: ThreadKey) -> usize {
+        self.on_the_way.get(&thread).map_or(0, VecDeque::len)
+    }
+
+    /// How many drafts `thread` holds.
+    #[cfg(test)]
+    pub(crate) fn held(&self, thread: ThreadKey) -> usize {
+        self.held.get(&thread).map_or(0, Vec::len)
     }
 }
 
@@ -81,13 +178,6 @@ enum Answered {
 /// leaves the prompt unconfirmed.
 pub(super) fn admission(answer: std::io::Result<Admission>) -> Admission {
     answer.unwrap_or_else(|error| Admission::Unconfirmed(error.to_string()))
-}
-
-impl HeldSends {
-    #[cfg(test)]
-    pub(crate) fn count(&self, thread: ThreadKey) -> usize {
-        self.0.get(&thread).map_or(0, Vec::len)
-    }
 }
 
 impl CockpitView {
@@ -134,9 +224,7 @@ impl CockpitView {
     /// `text` goes to `thread`: now, or once the prompts sent before it
     /// are settled.
     fn send_in_turn(&mut self, thread: ThreadKey, text: String, from: Origin, cx: &mut Context<Self>) {
-        let waiting = self.outbox.0.entry(thread).or_default();
-        waiting.push_back(Outgoing { text, from });
-        if waiting.len() == 1 {
+        if self.sends.send(thread, Outgoing { text, from }) {
             self.ask_next_send(thread, cx);
         }
     }
@@ -144,14 +232,7 @@ impl CockpitView {
     /// Ask the Server to take `thread`'s oldest draft on its way: queued
     /// behind a running turn, else sent.
     fn ask_next_send(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
-        let Some(text) = self
-            .outbox
-            .0
-            .get(&thread)
-            .and_then(|waiting| waiting.front())
-            .map(|next| next.text.clone())
-        else {
-            self.outbox.0.remove(&thread);
+        let Some(text) = self.sends.next(thread) else {
             return;
         };
         if self
@@ -181,12 +262,7 @@ impl CockpitView {
     /// The Server answered for `thread`'s oldest prompt on its way: settle
     /// it, and ask for the next.
     fn sent(&mut self, thread: ThreadKey, answered: Answered, cx: &mut Context<Self>) {
-        let Some(Outgoing { from, .. }) = self
-            .outbox
-            .0
-            .get_mut(&thread)
-            .and_then(VecDeque::pop_front)
-        else {
+        let Some(from) = self.sends.answered(thread) else {
             return;
         };
         match from {
@@ -274,7 +350,7 @@ impl CockpitView {
     fn return_send(&mut self, thread: ThreadKey, draft: SentDraft, cx: &mut Context<Self>) {
         match self.pane_sending(thread, cx) {
             Some(index) => self.put_back_send(index, draft, true, cx),
-            None => self.held_sends.0.entry(thread).or_default().push(Held {
+            None => self.sends.hold(thread, Held {
                 draft,
                 listed: false,
                 lost: true,
@@ -299,7 +375,7 @@ impl CockpitView {
                         .iter()
                         .any(|queued| queued.text.trim() == draft.prompt().trim())
                 });
-                self.held_sends.0.entry(thread).or_default().push(Held {
+                self.sends.hold(thread, Held {
                     draft,
                     listed,
                     lost: false,
@@ -342,7 +418,7 @@ impl CockpitView {
     /// Keep `draft` under `thread` while its prompt waits in the Thread's
     /// queue, so taking the prompt back to edit gives the draft back whole.
     pub(super) fn hold_queued(&mut self, thread: ThreadKey, draft: SentDraft) {
-        self.held_sends.0.entry(thread).or_default().push(Held {
+        self.sends.hold(thread, Held {
             draft,
             listed: true,
             lost: false,
@@ -353,65 +429,13 @@ impl CockpitView {
     /// from while this window still holds it, else its text split into
     /// parts.
     pub(super) fn recovered_content(&mut self, thread: ThreadKey, prompt: String) -> DraftContent {
-        match self.held_draft(thread, &prompt) {
+        match self.sends.take_held(thread, &prompt) {
             Some(draft) => draft.content().clone(),
             None => DraftContent::from_prompt(prompt),
         }
     }
 
-    /// The draft `thread` held, when `prompt` is that prompt handed back by
-    /// a Session that never started.
-    fn held_draft(&mut self, thread: ThreadKey, prompt: &str) -> Option<SentDraft> {
-        let held = self.held_sends.0.get_mut(&thread)?;
-        let at = held
-            .iter()
-            .position(|held| held.draft.prompt().trim() == prompt.trim())?;
-        let held = held.remove(at).draft;
-        if self.held_sends.0.get(&thread).is_some_and(Vec::is_empty) {
-            self.held_sends.0.remove(&thread);
-        }
-        Some(held)
-    }
 
-    /// Follow each held draft with its prompt: one the Session took is let
-    /// go, one still waiting or handed back and not yet collected is kept,
-    /// and one whose Thread closed under it is marked lost. A deleted
-    /// Thread's go.
-    pub(super) fn settle_held_sends(&mut self, cx: &gpui::App) {
-        let cockpit = self.cockpit.read(cx);
-        self.held_sends.0.retain(|&thread, held| {
-            let Some(view) = cockpit.thread(thread) else {
-                if cockpit.peek(thread).is_err() {
-                    return false;
-                }
-                held.iter_mut().for_each(|held| held.lost = true);
-                return true;
-            };
-            let waiting = view.queue();
-            let handed_back = view.recovered().is_some();
-            held.retain_mut(|held| {
-                let here = waiting
-                    .iter()
-                    .any(|queued| queued.text.trim() == held.draft.prompt().trim());
-                held.listed |= here;
-                here || handed_back || !held.listed || held.lost
-            });
-            !held.is_empty()
-        });
-    }
-
-    /// The drafts `thread` lost when it closed with a prompt held.
-    pub(super) fn lost_sends(&mut self, thread: ThreadKey) -> Vec<SentDraft> {
-        let Some(held) = self.held_sends.0.get_mut(&thread) else {
-            return Vec::new();
-        };
-        let (lost, kept) = std::mem::take(held).into_iter().partition(|held| held.lost);
-        *held = kept;
-        if held.is_empty() {
-            self.held_sends.0.remove(&thread);
-        }
-        lost.into_iter().map(|held: Held| held.draft).collect()
-    }
 }
 
 fn named(prompt: &str) -> String {
