@@ -280,6 +280,8 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
     let held = copying_part_way(&dest, cx);
     press(cx, "placement-cancel");
     held.let_go();
+    // Cancelled once box has answered what the copy had asked.
+    drawn(cx, "placement-cancelled");
     assert!(sheet(&view, cx).is_some(), "Cancel stops the copy, not the sheet");
     assert!(!copy_runs(&view, cx));
     cancelled_part_way(cx);
@@ -342,6 +344,56 @@ fn a_copy_cancelled_part_way_is_resumed_and_keeps_what_was_put_there_since(cx: &
         ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
         Vec::<PathBuf>::new(),
         "finished"
+    );
+}
+
+/// A Cancel while a file the copy asked box to put in place is still on
+/// its way stops the copy, but the card says it is cancelling, with no
+/// Resume, until box has answered all the copy asked: the file lands
+/// before the card says the copy was cancelled, never after, and only
+/// then can it be resumed.
+#[gpui::test]
+fn a_copy_is_said_cancelled_only_once_what_it_asked_has_landed(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-stopping");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-stopping", &projects);
+    let source = project_folder(&base.join("here/app"), None);
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    let dest = projects.join("app");
+
+    let held = hold_box_at_finish(&source, ".gitignore");
+    press(cx, "placement-copy");
+    until(cx, |cx| held.holds() && text_of(cx, "placement-sent").is_some_and(|said| said.contains(" of ")));
+    press(cx, "placement-cancel");
+    assert!(!dest.join(".gitignore").exists(), "asked for, not yet in place");
+    assert!(
+        text_of(cx, "placement-cancelled").is_none(),
+        "not said to be cancelled while what it asked may still land: {:?}",
+        text_of(cx, "placement-cancelled")
+    );
+    assert!(debug_bounds(cx, "placement-resume".into()).is_none(), "no Resume to run beside it");
+    assert_eq!(
+        text_of(cx, "placement-stopping").as_deref(),
+        Some("Cancelling\u{2026} waiting for box to answer")
+    );
+    assert!(debug_bounds(cx, "placement-cancel".into()).is_none(), "cancelled once");
+    assert!(copy_runs(&view, cx), "it runs until box has answered");
+
+    held.let_go();
+    drawn(cx, "placement-cancelled");
+    assert!(dest.join(".gitignore").is_file(), "what it asked landed before it was said cancelled");
+    assert!(!copy_runs(&view, cx));
+    assert!(debug_bounds(cx, "placement-resume".into()).is_some());
+    assert_eq!(
+        ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
+        [dest.clone()],
+        "what it sent is kept for its Resume"
     );
 }
 
@@ -437,6 +489,7 @@ fn the_card_goes_and_the_copy_goes_on_until_cancel(cx: &mut TestAppContext) {
     pick_on(&view, ENVIRONMENT, "box", cx);
     press(cx, "placement-cancel");
     held.let_go();
+    drawn(cx, "placement-cancelled");
     assert!(!copy_runs(&view, cx), "Cancel stops it");
     assert_eq!(leaving(cx), None, "nothing is cut off by leaving now");
     cancelled_part_way(cx);
@@ -848,6 +901,7 @@ fn another_projects_unfinished_copy_is_left_to_it(cx: &mut TestAppContext) {
     let held = copying_part_way(&dest, cx);
     press(cx, "placement-cancel");
     held.let_go();
+    drawn(cx, "placement-cancelled");
     press(cx, "placement-close");
     // The write the cancel cut off is dropped there once its connection ends.
     let part = |path: &PathBuf| path.extension().is_some_and(|ext| ext == "part");
@@ -1328,6 +1382,57 @@ fn a_copy_that_landed_but_was_not_added_resumes_by_adding_it(cx: &mut TestAppCon
     until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
     assert_eq!(roots_on(&view, on_box, cx), [projects.join("app")]);
     drawn(cx, "placement-where");
+}
+
+/// A copy whose files all landed and that box could not add stays
+/// unfinished on this computer until it is added, not only in the window:
+/// once the window lets go of it, its card closed and its draft sent here,
+/// the card opened again finds it there and its Resume adds it.
+#[gpui::test]
+fn a_copy_not_added_stays_unfinished_until_it_is(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-unadded-kept");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-unadded-kept", &projects);
+    let on_box = machines.held(1).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    let dest = projects.join("app");
+    // box cannot keep what it registers: its registry cannot be written.
+    let jammed = settings_dir("env-unadded-kept").join("box").join("registry.json.tmp");
+    std::fs::create_dir_all(&jammed).unwrap();
+    press(cx, "placement-copy");
+    drawn(cx, "placement-failed");
+    assert!(dest.join("main.rs").is_file(), "all of it landed");
+    assert_eq!(
+        ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
+        [dest.clone()],
+        "unfinished until it is added"
+    );
+
+    press(cx, "placement-close");
+    pick_on(&view, ENVIRONMENT, "Local", cx);
+    let kept = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.copies.read(cx).iter().count());
+    assert_eq!(kept(cx), 0, "the window let go of it");
+    std::fs::remove_dir_all(&jammed).unwrap();
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-unfinished");
+    until(cx, |cx| destination(&view, cx).replace('\\', "/") == shown(&dest));
+    drawn(cx, "placement-ignored:.env");
+    press(cx, "placement-resume");
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    assert_eq!(roots_on(&view, on_box, cx), [dest.clone()]);
+    assert_eq!(
+        ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
+        Vec::<PathBuf>::new(),
+        "added, it is no longer unfinished"
+    );
 }
 
 /// A copy that ends while the window is in the background tells the

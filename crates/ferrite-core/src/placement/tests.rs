@@ -5,6 +5,33 @@ use crate::project::ProjectId;
 use crate::protocol::Repositories;
 use crate::tree::{Asked, Reply, Request, Session};
 
+/// Where a test steps in to a writer of what this computer keeps of a
+/// Machine: between its read and its write, and as it waits for the
+/// record.
+pub(super) mod seam {
+    use std::sync::{mpsc, Mutex};
+
+    type Hook = Box<dyn FnOnce() + Send>;
+
+    /// Run once, by the next writer, between its read and its write.
+    pub(in crate::placement) static BETWEEN: Mutex<Option<Hook>> = Mutex::new(None);
+    /// Told each time a writer waits for the record.
+    pub(in crate::placement) static WAITS: Mutex<Option<mpsc::Sender<&'static str>>> = Mutex::new(None);
+
+    pub(in crate::placement) fn between() {
+        let hook = BETWEEN.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    pub(in crate::placement) fn waits() {
+        if let Some(told) = &*WAITS.lock().unwrap() {
+            let _ = told.send("waits");
+        }
+    }
+}
+
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-placement-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -455,6 +482,9 @@ struct Local {
     refuse: bool,
     /// Refuses every link, as a Windows Server did before it made them.
     refuse_links: bool,
+    /// Once it has cancelled, the line drops: no reply is heard again,
+    /// though what was asked was done.
+    drops_once_cancelled: bool,
 }
 
 impl Local {
@@ -467,6 +497,7 @@ impl Local {
             cancel: None,
             refuse: false,
             refuse_links: false,
+            drops_once_cancelled: false,
         }
     }
 
@@ -519,6 +550,9 @@ impl Exchange for Local {
     }
 
     fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        if self.drops_once_cancelled && self.cancel.as_ref().is_some_and(|(_, _, after)| self.counted >= *after) {
+            return Err(io::Error::new(io::ErrorKind::ConnectionReset, "The connection to the server closed"));
+        }
         while let Some((id, reply)) = self.replies.pop_front() {
             if id == asked.id() {
                 return reply;
@@ -597,7 +631,41 @@ fn a_copy_cancelled_as_its_last_replies_come_stays_unfinished() {
 
     let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
     assert_eq!((resumed.written, changed), (0, Vec::<String>::new()), "nothing left to send");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
+    added_there(&kept, &source, &dest).unwrap();
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+}
+
+/// A first copy cancelled once the Machine took its first file, the line
+/// dropping before that file's replies are heard: what landed there is
+/// not known to be nothing, so the copy is kept as unfinished, and its
+/// Resume finds that file there.
+#[test]
+fn a_copy_whose_line_drops_as_its_cancel_is_heard_stays_unfinished() {
+    let dir = scratch("cancelled-dropped");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(&source).unwrap();
+    for at in 0..3 {
+        fs::write(source.join(format!("file-{at}.txt")), format!("{at}")).unwrap();
+    }
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let cancel = Cancellation::default();
+    let mut dropping = Local {
+        drops_once_cancelled: true,
+        ..Local::cancelling_once_finished(&cancel, 1)
+    };
+    let stopped = copy(&job, &mut dropping, &mut |_| {}, &cancel).expect_err("cancelled part way");
+    assert!(dest.join("file-0.txt").is_file(), "the Machine took the first file");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept as unfinished");
+    assert!(!stopped.took_nothing(), "its replies were never heard: {stopped:?}");
+
+    let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!((resumed.written, changed), (2, Vec::<String>::new()), "the rest, and only the rest");
 }
 
 /// A copy stopped part way is kept as unfinished, on this computer, from
@@ -638,7 +706,7 @@ fn a_resume_sends_only_what_is_not_there_and_leaves_what_someone_put_there() {
             assert_eq!(fs::read_to_string(dest.join(&path)).unwrap(), at.to_string(), "{path}");
         }
     }
-    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
 }
 
 /// A resume's progress is of the whole copy: what the stopped copy landed
@@ -723,9 +791,8 @@ fn a_copy_stopped_at_a_link_is_finished_by_its_resume() {
     assert_eq!((resumed.linked, resumed.unmade.len()), (1, 0), "{resumed:?}");
     assert_eq!(changed, Vec::<String>::new());
     assert_eq!(fs::read(dest.join("node_modules/pkg/index.js")).unwrap(), b"module.exports = 1;\n");
-    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
 
-    begun(&kept, Unfinished { local_root: source.clone(), remote_root: dest.clone() }).unwrap();
     fs::remove_file(dest.join("README.md")).unwrap();
     let (again, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
     assert_eq!(changed, Vec::<String>::new(), "the link there is this copy's");
@@ -898,6 +965,48 @@ fn a_destination_with_another_projects_unfinished_copy_is_that_ones() {
     assert!(matches!(&copied, Copied::AnotherCopy { of } if *of == first), "{copied:?}");
     assert_eq!(holds(&dest), before);
     assert_eq!(unfinished(&kept, &first), [dest.clone()], "the first Project's copy is still unfinished");
+}
+
+/// The window adding one Project's copy as another Project's copy to
+/// another destination on the same Machine begins: one writes the
+/// Machine's record whole only once the other has, so neither writes
+/// over what the other kept.
+#[test]
+fn adding_one_copy_never_erases_another_projects_unfinished_copy() {
+    let dir = scratch("two-writers");
+    let kept = dir.join("machine");
+    let first = Unfinished {
+        local_root: dir.join("here/first"),
+        remote_root: dir.join("there/first"),
+    };
+    let second = Unfinished {
+        local_root: dir.join("here/second"),
+        remote_root: dir.join("there/second"),
+    };
+    begun(&kept, first.clone()).unwrap();
+    let (told, heard) = std::sync::mpsc::channel();
+    let (beginning, at) = (kept.clone(), second.clone());
+    let writer = std::sync::Arc::new(Mutex::new(None));
+    let spawned = writer.clone();
+    *seam::BETWEEN.lock().unwrap() = Some(Box::new(move || {
+        // The first copy's record is read and not yet written: the second
+        // copy begins, and either waits for the record or writes it.
+        *seam::WAITS.lock().unwrap() = Some(told.clone());
+        *spawned.lock().unwrap() = Some(std::thread::spawn(move || {
+            begun(&beginning, at).unwrap();
+            let _ = told.send("wrote");
+        }));
+        heard.recv().unwrap();
+    }));
+    added_there(&kept, &first.local_root, &first.remote_root).unwrap();
+    let writer = writer.lock().unwrap().take().expect("the second copy began meanwhile");
+    writer.join().unwrap();
+    assert_eq!(unfinished(&kept, &first.local_root), Vec::<PathBuf>::new(), "the first is added");
+    assert_eq!(
+        unfinished(&kept, &second.local_root),
+        [second.remote_root.clone()],
+        "the second is still unfinished"
+    );
 }
 
 /// Removed, a Machine takes along what this computer kept of it.

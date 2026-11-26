@@ -367,12 +367,53 @@ fn what_a_copy_says_after_its_machine_went_counts() {
 
 /// A cancel stops a copy that lists or sends, what it sent kept for its
 /// Resume; one that comes once all of it landed is too late, and the copy
-/// is added as if it never came (`Cancellation`).
+/// is added as if it never came (`Cancellation`). A copy cancelled is
+/// stopping, running still and with nothing to resume, until its thread
+/// says how it ended: what it asked may land till then.
+/// A Cancel whose replies its Machine never all answered is not one the
+/// card can say took: a file it had already sent may still land there.
+/// The card says that, never that the copy was cancelled, and its Resume
+/// is the way on. One cancelled before its connection was made had asked
+/// nothing: cancelled, with Retry.
+#[test]
+fn a_cancel_its_machine_never_answered_is_not_said_to_have_stopped_the_copy() {
+    let now = Instant::now();
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    copy.hear(sending(5, 12, "a"), now, true);
+    assert!(copy.cancel());
+    let unanswered = io::Error::new(io::ErrorKind::TimedOut, "The server did not answer in time");
+    assert_eq!(copy.hear(stopped(unanswered), now, true), None);
+    assert!(!copy.phase.live(), "its thread ended");
+    assert_eq!(copy.phase.again(), Some(&Again::Resume), "its Resume is the way on");
+    let (said, failed) = copy.standing(true).expect("it says how it stands");
+    assert!(!said.to_lowercase().contains("cancelled"), "{said}");
+    assert_eq!(said, "box stopped answering, so a file already sent may still land there.");
+    assert!(failed, "said as a failure");
+
+    let mut copy = Entry::new(order(false), Some(run()), now);
+    assert!(copy.cancel());
+    let unwelcomed = Heard::Unreached {
+        error: io::Error::new(io::ErrorKind::TimedOut, "The server did not welcome the connection in time"),
+        unfinished: Vec::new(),
+    };
+    copy.hear(unwelcomed, now, true);
+    assert_eq!(copy.phase.again(), Some(&Again::Retry));
+    assert_eq!(copy.standing(true), Some(("Copy cancelled before anything was sent.".into(), false)));
+}
+
 #[test]
 fn a_copy_is_cancelled_or_added_never_both() {
     let now = Instant::now();
     let mut copy = Entry::new(order(false), Some(run()), now);
     assert!(copy.cancel());
+    let ended = Heard::Copied {
+        copied: Err(Stopped {
+            error: io::ErrorKind::Interrupted.into(),
+            sent: Sent::default(),
+        }),
+        unfinished: Vec::new(),
+    };
+    assert_eq!(copy.hear(ended, now, true), None, "the operator did it: nothing to tell");
     assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Retry, .. }), "nothing was sent");
     assert_eq!(copy.standing(false), Some(("Copy cancelled before anything was sent.".into(), false)));
 
@@ -380,19 +421,24 @@ fn a_copy_is_cancelled_or_added_never_both() {
     copy.hear(sending(5, 12, "a"), now, true);
     assert!(copy.cancel());
     assert!(cancelled(&copy));
-    assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume, .. }), "what it sent stays");
+    assert!(matches!(copy.phase, Phase::Stopping { .. }), "stopping");
+    assert!(copy.phase.live(), "it runs till its thread ends");
+    assert_eq!((copy.phase.again(), copy.standing(false)), (None, None), "nothing to resume yet");
     assert!(!copy.cancel(), "it stopped already");
-    copy.hear(stopped(io::ErrorKind::Interrupted.into()), now, true);
+    copy.hear(sending(7, 12, "b"), now, true);
+    assert!(matches!(copy.phase, Phase::Stopping { .. }), "what it hears meanwhile moves nothing");
+    assert_eq!(copy.hear(stopped(io::ErrorKind::Interrupted.into()), now, true), None);
     assert!(matches!(copy.phase, Phase::Cancelled { again: Again::Resume, .. }), "it stopped part way");
     assert_eq!(
         copy.standing(false),
         Some(("Copy cancelled at 41%. Resume finishes it.".into(), false)),
-        "how far it got, never rounded up"
+        "how far it got when cancelled, never rounded up"
     );
 
     // A resume cancelled while it lists cannot say how far it got.
     let mut copy = Entry::new(order(true), Some(run()), now);
     assert!(copy.cancel());
+    copy.hear(stopped(io::ErrorKind::Interrupted.into()), now, true);
     assert_eq!(copy.standing(false), Some(("Copy cancelled. Resume finishes it.".into(), false)));
 
     let going = run();

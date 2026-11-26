@@ -132,6 +132,19 @@ fn shared_folder<'a>(paths: impl Iterator<Item = &'a str>) -> String {
     shared.unwrap_or_default().join("/")
 }
 
+/// A copy to `machine` cancelled as `machine` stopped answering what it
+/// had asked: not known to have stopped, since a write asked for may land
+/// there yet.
+pub(crate) fn unanswered(machine: &str) -> String {
+    format!("{machine} stopped answering, so a file already sent may still land there.")
+}
+
+/// A copy to `machine` cancelled while what it asked is on its way: the
+/// card and its toast say so until `machine` has answered all of it.
+pub(crate) fn stopping(machine: &str) -> String {
+    format!("Cancelling\u{2026} waiting for {machine} to answer")
+}
+
 /// What a Server said went wrong, as a clause: `Access is denied. (os
 /// error 5)` reads `access is denied`.
 pub(crate) fn plainly(said: &str) -> String {

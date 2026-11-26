@@ -211,6 +211,7 @@ impl PlacementView {
                 Some((bytes, bytes, Reading::default())),
                 format!("Adding {} on {machine}", split_dest(&copy.order.dest).1),
             ),
+            Phase::Stopping { .. } => (None, copies::words::stopping(&machine)),
             _ => (None, String::new()),
         };
         if let Some((sent, total, reading)) = numbers {
@@ -234,18 +235,19 @@ impl PlacementView {
                     .child(note(pace).min_w_0().truncate().debug_selector(|| "placement-rate".into())),
             );
         }
+        let stopping = matches!(copy.phase, Phase::Stopping { .. });
         content = content.child(
             note(line)
                 .h(px(LH_UI))
                 .truncate()
-                .debug_selector(|| "placement-file".into()),
+                .debug_selector(move || if stopping { "placement-stopping" } else { "placement-file" }.into()),
         );
-        let finishing = matches!(copy.phase, Phase::Finishing { .. });
+        let cancels = matches!(copy.phase, Phase::Listing { .. } | Phase::Copying { .. });
         let right = div()
             .flex()
             .items_center()
             .gap(px(SPACE_2))
-            .when(!finishing, |right| {
+            .when(cancels, |right| {
                 right.child(
                     components::ghost_button("placement-cancel", "Cancel", cx)
                         .debug_selector(|| "placement-cancel".into())

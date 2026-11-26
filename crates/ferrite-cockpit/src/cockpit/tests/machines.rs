@@ -55,11 +55,32 @@ static SENT_TO_BOX: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// While set, box's Server is down: its links have ended and no tunnel
 /// reaches it (`box_down`).
 static BOX_DOWN: AtomicBool = AtomicBool::new(false);
-/// While it names a file, box's Server takes nothing more a window sends
-/// once that file is there, as over a line that stalled, till the test
-/// lets it go (`hold_box_once`).
-static BOX_HELD_ONCE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+/// Where box's Server takes nothing more a window sends, as over a line
+/// that stalled, till the test lets it go.
+enum Hold {
+    /// Once this file is there (`hold_box_once`).
+    Landed(std::path::PathBuf),
+    /// From the write that asks it to put in place the file whose SHA-256
+    /// this is: that file's `finish` is on its way, not yet taken
+    /// (`hold_box_at_finish`).
+    Finish(String),
+}
+
+impl Hold {
+    /// Whether box holds what a window sends, `seen` the end of what it
+    /// sent on this link, this write last.
+    fn holds(&self, seen: &[u8]) -> bool {
+        match self {
+            Hold::Landed(landed) => landed.exists(),
+            Hold::Finish(sha256) => seen.windows(sha256.len()).any(|at| at == sha256.as_bytes()),
+        }
+    }
+}
+
+static BOX_HELD: Mutex<Option<Hold>> = Mutex::new(None);
 static BOX_LET_GO: std::sync::Condvar = std::sync::Condvar::new();
+/// Box holds a write now.
+static BOX_HOLDING: AtomicBool = AtomicBool::new(false);
 /// Box's links as `serving` made them, to end when it goes down.
 static BOX_LINKS: Mutex<Vec<ferrite_core::link::Stream>> = Mutex::new(Vec::new());
 
@@ -67,7 +88,23 @@ static BOX_LINKS: Mutex<Vec<ferrite_core::link::Stream>> = Mutex::new(Vec::new()
 /// lands it is held part way, however loaded the machine, till the hold
 /// lets go or drops, so a test that fails while box holds ends.
 fn hold_box_once(landed: std::path::PathBuf) -> BoxHeld {
-    *BOX_HELD_ONCE.lock().unwrap() = Some(landed);
+    hold_box(Hold::Landed(landed))
+}
+
+/// Box's Server takes nothing more from the write that asks it to put
+/// `path` of the Project at `source` in place: a copy is held with that
+/// file asked for and not yet there, till the hold lets go or drops.
+fn hold_box_at_finish(source: &std::path::Path, path: &str) -> BoxHeld {
+    let listed = ferrite_core::tree::scan(source, &[]).unwrap();
+    let Some(ferrite_core::tree::Entry::File { sha256, .. }) = listed.entries.get(path) else {
+        panic!("{path} is no file of {}", source.display());
+    };
+    hold_box(Hold::Finish(sha256.clone()))
+}
+
+fn hold_box(hold: Hold) -> BoxHeld {
+    BOX_HOLDING.store(false, Ordering::SeqCst);
+    *BOX_HELD.lock().unwrap() = Some(hold);
     BoxHeld
 }
 
@@ -75,13 +112,19 @@ fn hold_box_once(landed: std::path::PathBuf) -> BoxHeld {
 struct BoxHeld;
 
 impl BoxHeld {
+    /// Whether box holds a write at the hold now.
+    fn holds(&self) -> bool {
+        BOX_HOLDING.load(Ordering::SeqCst)
+    }
+
     /// Box takes what it is sent again.
     fn let_go(self) {}
 }
 
 impl Drop for BoxHeld {
     fn drop(&mut self) {
-        *BOX_HELD_ONCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *BOX_HELD.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        BOX_HOLDING.store(false, Ordering::SeqCst);
         BOX_LET_GO.notify_all();
     }
 }
@@ -103,19 +146,26 @@ fn box_down(down: bool) {
 /// box is down.
 fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
     use ferrite_core::link::{self, TryClone};
-    struct Kept(link::Stream);
+    /// Box's end of a link, and the end of what was sent on it: a request
+    /// split across writes is seen whole.
+    struct Kept(link::Stream, Vec<u8>);
     impl std::io::Write for Kept {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let mut held = BOX_HELD_ONCE.lock().unwrap();
-            if held.as_deref().is_some_and(std::path::Path::exists) {
+            let mut seen = std::mem::take(&mut self.1);
+            seen.extend_from_slice(buf);
+            let holds = |held: &Option<Hold>| held.as_ref().is_some_and(|hold| hold.holds(&seen));
+            let mut held = BOX_HELD.lock().unwrap();
+            if holds(&held) {
+                BOX_HOLDING.store(true, Ordering::SeqCst);
                 // A test waiting for the hold looks again: a held copy
                 // says nothing more.
                 ferrite_core::doorbell::ring();
             }
-            while held.as_deref().is_some_and(std::path::Path::exists) {
+            while holds(&held) {
                 held = BOX_LET_GO.wait(held).unwrap();
             }
             drop(held);
+            self.1 = seen[seen.len().saturating_sub(128)..].to_vec();
             SENT_TO_BOX.lock().unwrap().extend_from_slice(buf);
             self.0.write(buf)
         }
@@ -143,7 +193,7 @@ fn serving(machine: &Machine, settings_dir: &std::path::Path) -> Bridge {
             BOX_LINKS.lock().unwrap().push(stream.try_clone()?);
             Ok(Tunnel {
                 from: Box::new(stream.try_clone()?),
-                to: Box::new(Kept(stream)),
+                to: Box::new(Kept(stream, Vec::new())),
                 ended: Box::new(|| None),
             })
         }),

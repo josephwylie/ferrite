@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use base64::Engine as _;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -34,6 +34,7 @@ pub fn placements(dir: &Path) -> Vec<Placement> {
 
 /// Keep `placement`, in place of any for the same Project of this computer.
 pub fn place(dir: &Path, placement: Placement) -> io::Result<()> {
+    let _kept = keeping();
     let mut known = placements(dir);
     known.retain(|old| old.local_root != placement.local_root);
     known.push(placement);
@@ -76,16 +77,31 @@ fn unfinished_of_another(dir: &Path, local_root: &Path, remote_root: &Path) -> O
 /// Keep `copy`, in place of any to the same destination of the same
 /// Project, last.
 fn begun(dir: &Path, copy: Unfinished) -> io::Result<()> {
+    let _kept = keeping();
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     known.retain(|old| !(old.local_root == copy.local_root && old.remote_root == copy.remote_root));
     known.push(copy);
+    #[cfg(test)]
+    tests::seam::between();
     write_list(&dir.join(UNFINISHED), &known)
 }
 
+/// The copy of the Project at `local_root` to `remote_root` is added
+/// there, a Project of the Machine whose files are in `dir`, and its
+/// Placement kept: it is unfinished no longer. Until then a copy whose
+/// files all landed is still unfinished, so one the window never added
+/// (its Machine went first, or the window did) is found by its Resume.
+pub fn added_there(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+    finished(dir, local_root, remote_root)
+}
+
 fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+    let _kept = keeping();
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     let before = known.len();
     known.retain(|old| !(old.local_root == local_root && old.remote_root == remote_root));
+    #[cfg(test)]
+    tests::seam::between();
     if known.len() == before {
         return Ok(());
     }
@@ -110,6 +126,7 @@ pub fn follow(from: &Path, to: &Path) -> io::Result<()> {
 /// What this computer keeps of a Machine whose files are in `dir` goes
 /// with it: it was removed.
 pub fn forget(dir: &Path) -> io::Result<()> {
+    let _kept = keeping();
     for name in [PLACEMENTS, UNFINISHED] {
         match fs::remove_file(dir.join(name)) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
@@ -117,6 +134,19 @@ pub fn forget(dir: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// What this computer keeps of its Machines is written by one writer at a
+/// time in this process. Each reads a Machine's record, changes it and
+/// writes it back whole, so two at once (copies to two destinations on one
+/// Machine, or the window adding one copy as another begins) would write
+/// over what the other kept. Held across the read and the write.
+static KEPT: Mutex<()> = Mutex::new(());
+
+fn keeping() -> MutexGuard<'static, ()> {
+    #[cfg(test)]
+    tests::seam::waits();
+    KEPT.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn read_list<T: DeserializeOwned>(path: &Path) -> Vec<T> {
@@ -701,12 +731,12 @@ const COUNTED: usize = 250;
 /// there: a file there as the copy sends it is done, and one that is not
 /// is someone else's, left and listed as changed. Neither removes
 /// anything. What could not be read as it was listed is sent once more,
-/// and what still could not is in the answer's problems. Once done, or
-/// stopped before anything landed, the copy is no longer kept as
-/// unfinished. It is cancelled or done, never both: a cancel heard after
-/// the last request, while its replies come, stops it all the same. A run
-/// waits for the one before it to the same destination to end
-/// ([`Going`]).
+/// and what still could not is in the answer's problems. Stopped before
+/// anything landed, the copy is no longer kept as unfinished; done, it is
+/// until it is added there ([`added_there`]). It is cancelled or done,
+/// never both: a cancel heard after the last request, while its replies
+/// come, stops it all the same. A run waits for the one before it to the
+/// same destination to end ([`Going`]).
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -740,9 +770,6 @@ pub fn copy(
     }
     if let Err(error) = cancel.end() {
         return Err(ended_short(Stopped { error, sent }));
-    }
-    if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
-        return Err(Stopped { error, sent });
     }
     Ok(Copied::Sent { sent, changed })
 }
