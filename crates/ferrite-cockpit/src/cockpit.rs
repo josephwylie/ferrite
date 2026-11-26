@@ -323,7 +323,6 @@ pub struct CockpitView {
     /// When the Threads' checkout labels are read from git
     /// (`refresh_branches`).
     branch_reads: branch_reads::BranchReads,
-    /// The machines whose Threads' branches are being read there.
     /// What a draft's workspace chip and its menu read of its Project's
     /// repo, as git or the machine's Server last answered.
     checkouts: checkouts::Checkouts,
@@ -370,13 +369,8 @@ pub struct CockpitView {
     composer_menu: Entity<composer_menu::ComposerMenuView>,
     /// What a draft's `/` and `$` menus list before it has a Session.
     draft_commands: draft_commands::DraftCommands,
-    /// The Project new drafts fall back to: the last one the operator was
-    /// working in. The launch reads it from the store's most recently used
-    /// Thread, and every explicit pick in the Composer's Project chip moves
-    /// it, so the next draft opens where the last one ran. Startup only
-    /// selects an already registered Project; it must never turn the app's
-    /// process directory into user workspace state.
-    launch_project: Option<ProjectKey>,
+    /// Where a new draft starts when nothing nearer names it (`drafts`).
+    launch: drafts::Launch,
     /// A draft's environment pick, waiting for its machines to say which
     /// Project is its Project's counterpart.
     environment_lookup: Option<draft_environment::Lookup>,
@@ -465,8 +459,6 @@ pub struct CockpitView {
     /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
     columns: columns::Columns,
-    /// The Provider an empty board's first draft starts on.
-    launch_provider: Provider,
     /// The machines this window holds (ADR 0026, ADR 0045); `None` in a
     /// window on an Engine of its own.
     machines: Option<crate::machines::Machines>,
@@ -835,7 +827,7 @@ impl CockpitView {
             window_heard: None,
             composer_menu,
             draft_commands: Default::default(),
-            launch_project,
+            launch: drafts::Launch::new(launch_provider, launch_project),
             environment_lookup: None,
             checkouts: Default::default(),
             rename: Default::default(),
@@ -874,7 +866,6 @@ impl CockpitView {
             task_toasts: Default::default(),
             empty_board,
             reader_slides: Default::default(),
-            launch_provider,
             machines,
         };
         // A Cockpit notification is the earliest common point after core
@@ -905,7 +896,7 @@ impl CockpitView {
         // nothing spawns before the operator's choice. Only this
         // computer's Projects are there before any Server answers.
         if view.panes.is_empty() && view.cockpit.read(cx).this_computer().is_some() {
-            if view.launch_project.is_some() {
+            if view.launch.project().is_some() {
                 view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
             } else {
                 view.open_project_creator(cx);

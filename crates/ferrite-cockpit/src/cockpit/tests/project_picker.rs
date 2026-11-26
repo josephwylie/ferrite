@@ -35,7 +35,7 @@ fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
             rows.iter().any(|row| row.active
                 && row.consequence
                     == Consequence::Band(BandChoice::Project(
-                        view.launch_project.expect("a launch Project"),
+                        view.launch.project().expect("a launch Project"),
                     ))),
             "the draft's own Project is the ticked row"
         );
@@ -177,7 +177,7 @@ fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
                 .unwrap()
                 .binding
                 .project(),
-            view.launch_project.expect("a launch Project"),
+            view.launch.project().expect("a launch Project"),
             "with no filter the draft starts where Ferrite was launched"
         );
     });
@@ -218,7 +218,7 @@ fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
         let draft = view.panes[view.focused(cx)].read(cx).draft().unwrap();
         assert_eq!(
             draft.binding.project(),
-            view.launch_project.expect("a launch Project")
+            view.launch.project().expect("a launch Project")
         );
 
         view.choose_nav_filter(Some(chosen), cx);

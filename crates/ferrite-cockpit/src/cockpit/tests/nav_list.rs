@@ -375,7 +375,7 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         // The fallback names the *other* Project, so a draft that
         // ignored the request would be caught.
-        view.launch_project = Some(elsewhere);
+        view.launch.worked_in(elsewhere);
         view.open_draft_in_project(heading, cx);
     });
     tick(cx);
@@ -388,7 +388,7 @@ fn a_new_thread_in_a_project_opens_a_draft_there(cx: &mut TestAppContext) {
             .expect("the command opened a draft");
         assert_eq!(draft.binding.project(), heading);
         assert_eq!(
-            view.launch_project,
+            view.launch.project(),
             Some(heading),
             "the next draft starts where this one was asked for"
         );

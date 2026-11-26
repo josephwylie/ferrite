@@ -245,7 +245,7 @@ impl CockpitView {
                 }
                 // The Project the operator just described is the one they
                 // want to look at, and to work in.
-                self.launch_project = Some(project);
+                self.launch.worked_in(project);
                 self.choose_nav_filter(Some(project), cx);
                 if self.empty_board_shown(cx) {
                     self.open_draft_with_provider(

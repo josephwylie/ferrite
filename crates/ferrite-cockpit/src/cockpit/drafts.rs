@@ -12,6 +12,51 @@ use ferrite_core::replies::Reply;
 use ferrite_core::roster::DraftId;
 use ferrite_core::ThreadKey;
 
+/// Where a new draft starts when nothing nearer names it: the Project the
+/// operator was last working in, and the Provider the window was launched
+/// with. The launch reads the Project from the store's most recently used
+/// Thread, and every explicit pick in the Composer's Project chip moves it,
+/// so the next draft opens where the last one ran. Startup only selects an
+/// already registered Project; it must never turn the app's process
+/// directory into user workspace state.
+pub(crate) struct Launch {
+    project: Option<ProjectKey>,
+    provider: Provider,
+}
+
+impl Launch {
+    pub(super) fn new(provider: Provider, project: Option<ProjectKey>) -> Self {
+        Self { project, provider }
+    }
+
+    /// The Project new drafts fall back to.
+    pub(crate) fn project(&self) -> Option<ProjectKey> {
+        self.project
+    }
+
+    /// The Provider an empty board's first draft starts on.
+    pub(crate) fn provider(&self) -> Provider {
+        self.provider
+    }
+
+    /// The operator chose `project` to work in: the next draft starts there.
+    pub(crate) fn worked_in(&mut self, project: ProjectKey) {
+        self.project = Some(project);
+    }
+
+    /// The Project went with its machine: fall back to where the start
+    /// machine was last worked in (`startup_project`).
+    pub(super) fn fall_back(&mut self, cockpit: &Cockpit) {
+        self.project = super::startup_project(cockpit);
+    }
+
+    /// No Project to fall back to, as a store with none leaves it.
+    #[cfg(test)]
+    pub(crate) fn forget(&mut self) {
+        self.project = None;
+    }
+}
+
 /// How long after the last keystroke the drafts are written: a burst of
 /// typing is one write.
 const SAVE_AFTER: Duration = Duration::from_secs(1);
@@ -392,7 +437,7 @@ impl CockpitView {
     /// <project>". It is a loose draft like every pointer-made one, and it
     /// moves the fallback Project, so the draft after it starts here too.
     pub(crate) fn open_draft_in_project(&mut self, project: ProjectKey, cx: &mut Context<Self>) {
-        self.launch_project = Some(project);
+        self.launch.worked_in(project);
         let provider = self.default_choice();
         self.open_draft_with_choice(
             DraftTarget::Main,
@@ -458,7 +503,7 @@ impl CockpitView {
         let project = chosen
             .or(current)
             .or(self.nav_filter)
-            .or(self.launch_project);
+            .or(self.launch.project());
         let Some(project) = project else {
             self.open_project_creator(cx);
             return;
@@ -600,7 +645,7 @@ impl CockpitView {
     /// registers `here()` once at construction, which tests cannot sit in.
     #[cfg(test)]
     pub(super) fn aim_launch(&mut self, root: &std::path::Path, cx: &mut gpui::App) {
-        self.launch_project = Some(
+        self.launch.worked_in(
             self.cockpit
                 .update(cx, |cockpit, _| {
                     let machine = cockpit.this_computer().expect("this computer is held");
@@ -608,7 +653,7 @@ impl CockpitView {
                 })
                 .expect("the scratch repo registers"),
         );
-        let project = self.launch_project.expect("the test aimed it");
+        let project = self.launch.project().expect("the test aimed it");
         for pane in &self.panes {
             pane.update_draft(cx, |draft| draft.binding.choose_project(project));
         }

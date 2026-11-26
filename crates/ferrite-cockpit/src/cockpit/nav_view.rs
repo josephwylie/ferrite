@@ -265,7 +265,7 @@ fn nav_inputs(
     let provider = shown
         .and_then(|key| model.thread(key))
         .map(|open| open.provider())
-        .unwrap_or(view.launch_provider);
+        .unwrap_or(view.launch.provider());
     // The foot's limits are the shown Thread's machine's, else this
     // computer's.
     let limits = shown

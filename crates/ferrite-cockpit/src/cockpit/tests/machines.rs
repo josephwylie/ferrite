@@ -1788,7 +1788,7 @@ fn a_new_thread_with_no_project_here_stays_on_this_computer(cx: &mut TestAppCont
                 cockpit.wait_for(removed).unwrap();
             }
         });
-        view.launch_project = None;
+        view.launch.forget();
         view.hide_sheet(cx);
     });
     tick(cx);
