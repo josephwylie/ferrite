@@ -432,6 +432,13 @@ pub enum Op {
     CliReplaced {
         provider: Provider,
     },
+    /// Sign `provider`'s CLI in on the machine the Server runs on, a step
+    /// at a time (ADR 0051): the CLI's own sign-in runs there, and only the
+    /// client that started one finishes or cancels it.
+    SignIn {
+        provider: Provider,
+        step: SignInStep,
+    },
     /// Git's worktree list for a Thread's repo, read `age_ms` before it was
     /// sent: a binding follows its agent into a worktree it made.
     WorktreesListed {
@@ -686,6 +693,7 @@ impl Op {
             | Op::ServerDefaults { .. }
             | Op::Cli { .. }
             | Op::CliReplaced { .. }
+            | Op::SignIn { .. }
             | Op::Focused { .. }
             | Op::ListDir { .. }
             | Op::FileOperation { .. }
@@ -1113,6 +1121,50 @@ pub enum CliAction {
     },
     #[serde(other)]
     Unknown,
+}
+
+/// One step of a `sign_in` (ADR 0051), each answered by one reply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SignInStep {
+    /// Whether the CLI is signed in there. Replied `sign_in_status`.
+    Status,
+    /// End any sign-in of the provider running there and start the CLI's
+    /// own. Replied `sign_in_page` once the CLI says where to sign in.
+    Start,
+    /// Hand the CLI the code its page showed, when it reads one, and wait
+    /// for it to end signed in. Replied `signed_in`.
+    Finish {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<Withheld>,
+    },
+    /// Stop the CLI and all it started.
+    Cancel,
+    #[serde(other)]
+    Unknown,
+}
+
+/// A code a sign-in passes on: what the operator pasted, or what the page
+/// asks for. Its `Debug` withholds it, so no log shows one.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Withheld(String);
+
+impl Withheld {
+    pub fn new(code: impl Into<String>) -> Self {
+        Self(code.into())
+    }
+
+    /// The code itself, for the one place that hands it on or shows it.
+    pub fn reveal(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Withheld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Withheld")
+    }
 }
 
 /// The copy of a provider CLI a machine runs.
@@ -1794,6 +1846,28 @@ pub enum Done {
     CliUpdated {
         provider: Provider,
         binary: CliBinary,
+    },
+    /// A `sign_in` status: whether the CLI is signed in, none when no CLI
+    /// is there or it did not answer.
+    SignInStatus {
+        provider: Provider,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signed_in: Option<bool>,
+    },
+    /// Where a started sign-in goes on: the page to open, the code to enter
+    /// there when the CLI shows one, and whether the code the page shows is
+    /// pasted back in `finish`.
+    SignInPage {
+        provider: Provider,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_code: Option<Withheld>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        paste: bool,
+    },
+    /// A finished sign-in: the CLI says it is signed in.
+    SignedIn {
+        provider: Provider,
     },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no

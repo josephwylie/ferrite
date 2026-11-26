@@ -1482,6 +1482,116 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "command_sign_in_status",
+            command(
+                240,
+                Op::SignIn {
+                    provider: Provider::Claude,
+                    step: SignInStep::Status,
+                },
+            ),
+        ),
+        (
+            "command_sign_in_start",
+            command(
+                241,
+                Op::SignIn {
+                    provider: Provider::Codex,
+                    step: SignInStep::Start,
+                },
+            ),
+        ),
+        (
+            "command_sign_in_finish",
+            command(
+                242,
+                Op::SignIn {
+                    provider: Provider::Codex,
+                    step: SignInStep::Finish { code: None },
+                },
+            ),
+        ),
+        (
+            "command_sign_in_finish_code",
+            command(
+                243,
+                Op::SignIn {
+                    provider: Provider::Claude,
+                    step: SignInStep::Finish {
+                        code: Some(Withheld::new("pasted-code#state")),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_sign_in_cancel",
+            command(
+                244,
+                Op::SignIn {
+                    provider: Provider::Claude,
+                    step: SignInStep::Cancel,
+                },
+            ),
+        ),
+        (
+            "reply_sign_in_status",
+            Sample::Server(ServerMessage::Reply {
+                id: 240,
+                ok: Some(Done::SignInStatus {
+                    provider: Provider::Claude,
+                    signed_in: Some(false),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_sign_in_status_unknown",
+            Sample::Server(ServerMessage::Reply {
+                id: 240,
+                ok: Some(Done::SignInStatus {
+                    provider: Provider::Codex,
+                    signed_in: None,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_sign_in_page_paste",
+            Sample::Server(ServerMessage::Reply {
+                id: 241,
+                ok: Some(Done::SignInPage {
+                    provider: Provider::Claude,
+                    url: "https://claude.ai/oauth/authorize?state=abc".into(),
+                    user_code: None,
+                    paste: true,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_sign_in_page_user_code",
+            Sample::Server(ServerMessage::Reply {
+                id: 241,
+                ok: Some(Done::SignInPage {
+                    provider: Provider::Codex,
+                    url: "https://auth.openai.com/codex/device".into(),
+                    user_code: Some(Withheld::new("WXYZ-12345")),
+                    paste: false,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_signed_in",
+            Sample::Server(ServerMessage::Reply {
+                id: 242,
+                ok: Some(Done::SignedIn {
+                    provider: Provider::Codex,
+                }),
+                error: None,
+            }),
+        ),
+        (
             "command_search_files",
             command(
                 24,
@@ -3194,6 +3304,36 @@ fn a_cli_status_from_a_newer_server_decodes_to_unknown() {
     .unwrap();
     assert_eq!(report.status, Some(CliStatus::Unknown));
     assert_eq!(report.status.and_then(CliStatus::known), None);
+}
+
+#[test]
+fn a_sign_in_step_from_a_newer_window_decodes_to_unknown_and_keeps_its_command() {
+    let line = br#"{"type":"command","id":9,"op":"sign_in","provider":"claude","step":{"kind":"api_key","key":"sk"}}"#;
+    assert_eq!(
+        decode::<ClientMessage>(line).unwrap(),
+        ClientMessage::Command(Command {
+            id: 9,
+            op: Op::SignIn {
+                provider: Provider::Claude,
+                step: SignInStep::Unknown,
+            },
+        })
+    );
+}
+
+#[test]
+fn a_sign_ins_codes_never_reach_a_log() {
+    let finish = SignInStep::Finish {
+        code: Some(Withheld::new("pasted-code#state")),
+    };
+    let page = Done::SignInPage {
+        provider: Provider::Codex,
+        url: "https://auth.openai.com/codex/device".into(),
+        user_code: Some(Withheld::new("WXYZ-12345")),
+        paste: false,
+    };
+    assert!(!format!("{finish:?}").contains("pasted-code"));
+    assert!(!format!("{page:?}").contains("WXYZ"));
 }
 
 #[test]
