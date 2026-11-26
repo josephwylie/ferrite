@@ -28,7 +28,7 @@ fn opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
 }
 
 fn numbers(view: &Entity<CockpitView>, thread: ThreadKey, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
-    view.read_with(cx, |view, cx| view.terminals.read(cx).numbers(thread))
+    view.read_with(cx, |view, cx| view.tools.terminals.read(cx).numbers(thread))
 }
 
 /// The shell the Thread's Panel shows.
@@ -38,7 +38,7 @@ fn shown_shell(
     cx: &mut gpui::VisualTestContext,
 ) -> Option<Entity<ferrite_terminal::TerminalView>> {
     view.read_with(cx, |view, cx| match view.active_surface(thread)? {
-        SurfaceId::Terminal(number) => view.terminals.read(cx).shell(thread, number),
+        SurfaceId::Terminal(number) => view.tools.terminals.read(cx).shell(thread, number),
         _ => None,
     })
 }
@@ -586,8 +586,8 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     back_to_shell(cx);
     cmd_click(cx, 2, 5);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
-    assert!(view.read_with(cx, |view, cx| view.files.read(cx).tab_names(thread)).contains(&("main.rs".to_string(), true)));
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).expect("the editor"));
+    assert!(view.read_with(cx, |view, cx| view.tools.files.read(cx).tab_names(thread)).contains(&("main.rs".to_string(), true)));
+    let editor = view.read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread).expect("the editor"));
     let (text, caret) = editor.read_with(cx, |editor, _| (editor.text().to_string(), editor.caret_for_test()));
     assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
 }

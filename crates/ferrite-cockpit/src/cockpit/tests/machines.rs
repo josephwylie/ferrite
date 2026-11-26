@@ -1564,7 +1564,7 @@ fn remote_files_and_terminal_open_through_their_keyboard_shortcuts(cx: &mut Test
     view.update(cx, |view, cx| view.open_in_files(thread, checkout.join("notes.txt"), None, true, cx));
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
-            view.files.read(cx).shown_editor(thread).is_some_and(|editor| editor.read(cx).text() == "written on box\n")
+            view.tools.files.read(cx).shown_editor(thread).is_some_and(|editor| editor.read(cx).text() == "written on box\n")
         })
     });
     cx.simulate_keystrokes("cmd-j");
@@ -3392,7 +3392,7 @@ fn machine_with_edited_remote_file<'a>(
         view.open_in_files(thread, checkout.join("edited.rs"), None, true, cx);
     });
     tick(cx);
-    let editor = view.read_with(cx, |view, cx| view.files.read(cx).shown_editor(thread).unwrap());
+    let editor = view.read_with(cx, |view, cx| view.tools.files.read(cx).shown_editor(thread).unwrap());
     editor.update(cx, |editor, cx| editor.type_text("edited ", cx));
     (view, editor, cx)
 }

@@ -146,11 +146,11 @@ fn a_restart_restores_the_files_working_set_selection_and_preferences(cx: &mut T
             view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
             view.open_in_files(thread, checkout.join("README.md"), None, true, cx);
             view.open_in_files(thread, checkout.join("src/lib.rs"), None, true, cx);
-            view.files.update(cx, |files, cx| files.run_verb(thread, crate::cockpit::tools::FilesVerb::ToggleWrap, cx));
+            view.tools.files.update(cx, |files, cx| files.run_verb(thread, crate::cockpit::tools::FilesVerb::ToggleWrap, cx));
         });
         tick(cx);
         assert_eq!(
-            view.read_with(cx, |view, cx| view.files.read(cx).wraps(thread)),
+            view.read_with(cx, |view, cx| view.tools.files.read(cx).wraps(thread)),
             Some(false)
         );
     }
@@ -163,7 +163,7 @@ fn a_restart_restores_the_files_working_set_selection_and_preferences(cx: &mut T
     );
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).tab_names(thread)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).tab_names(thread)),
         [
             ("lib.rs".to_string(), false),
             ("README.md".to_string(), false)
@@ -171,12 +171,12 @@ fn a_restart_restores_the_files_working_set_selection_and_preferences(cx: &mut T
         "the open files return"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).active_path(thread)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).active_path(thread)),
         Some(checkout.join("src/lib.rs")),
         "with the one that was shown"
     );
     assert_eq!(
-        view.read_with(cx, |view, cx| view.files.read(cx).wraps(thread)),
+        view.read_with(cx, |view, cx| view.tools.files.read(cx).wraps(thread)),
         Some(false),
         "and its preferences"
     );
@@ -217,7 +217,7 @@ fn a_file_missing_after_restart_says_so_and_can_be_tried_again(cx: &mut TestAppC
     tick(cx);
     std::fs::remove_file(&note).unwrap();
     assert!(view
-        .read_with(cx, |view, cx| view.files.read(cx).tab_names(thread))
+        .read_with(cx, |view, cx| view.tools.files.read(cx).tab_names(thread))
         .iter()
         .any(|(name, _)| name == "note.txt"));
 }

@@ -238,12 +238,12 @@ impl CockpitView {
             return;
         }
         for machine in &gone {
-            self.terminals.update(cx, |terminals, cx| terminals.let_go(*machine, cx));
+            self.tools.terminals.update(cx, |terminals, cx| terminals.let_go(*machine, cx));
         }
         self.forget_projects_of(&gone, cx);
         let reheld = self.panel.hold(self.cockpit.read(cx));
         for rehold in &reheld {
-            self.terminals.update(cx, |terminals, cx| terminals.held_again(*rehold, cx));
+            self.tools.terminals.update(cx, |terminals, cx| terminals.held_again(*rehold, cx));
             self.side_chat.update(cx, |chat, cx| chat.held_again(*rehold, cx));
         }
         if !reheld.is_empty() {

@@ -72,7 +72,7 @@ impl CockpitView {
         let agents = self
             .in_flight(|machine| cockpit.server(machine).is_none(), cx)
             .map(|what| format!("{what}. Leaving stops them; their Threads reopen next launch."));
-        let files = self.files.read(cx);
+        let files = self.tools.files.read(cx);
         let unsaved: usize = cockpit
             .machines()
             .filter_map(|machine| files.unsaved_at_leaving(machine, cx))

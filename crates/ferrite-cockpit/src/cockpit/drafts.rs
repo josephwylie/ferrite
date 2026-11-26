@@ -270,7 +270,7 @@ impl CockpitView {
     pub(super) fn adopt_thread(&mut self, index: usize, thread: ThreadKey, cx: &mut Context<Self>) {
         let draft = self.panes[index].identity;
         self.panes[index].adopt_thread(thread, cx);
-        self.file_surface
+        self.panel.file_surface
             .update(cx, |files, _| files.adopt(draft, PaneIdentity::Thread(thread)));
         self.decisions
             .update(cx, |decisions, _| decisions.adopt(draft, PaneIdentity::Thread(thread)));

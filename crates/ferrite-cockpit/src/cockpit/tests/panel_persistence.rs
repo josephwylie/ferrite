@@ -75,7 +75,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
     let thread = view.update(cx, |view, cx| {
         let thread = view.panes[0].thread().unwrap();
         view.open_in_files(thread, file.clone(), None, true, cx);
-        view.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::TogglePreviewTabs, cx));
+        view.tools.files.update(cx, |files, cx| files.run_verb(thread, FilesVerb::TogglePreviewTabs, cx));
         view.close_surfaces(thread, CloseSelection::One(SurfaceId::Files), cx);
         view.apply_surface(thread, SurfaceAction::Reopen);
         view.apply_surface(thread, SurfaceAction::ToggleDetails);
@@ -94,7 +94,7 @@ fn close_reopen_and_files_preferences_restore_with_the_saved_panel(cx: &mut Test
         assert!(!view.panel.surfaces.get(thread).unwrap().details_inline_open);
         view.ensure_files(thread, cx);
         assert_eq!(
-            view.files.read(cx).tab_names(thread),
+            view.tools.files.read(cx).tab_names(thread),
             [("lib.rs".to_string(), false)]
         );
         view.open_context_menu(

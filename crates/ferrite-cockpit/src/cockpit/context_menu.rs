@@ -445,10 +445,10 @@ impl CockpitView {
             MenuTarget::File(thread) => {
                 rows = files_rows(tools::FilesView::row_rows(self.elsewhere(thread.machine(), cx)))
             }
-            MenuTarget::FilesMore(thread) => rows = files_rows(self.files.read(cx).more_rows(thread)),
+            MenuTarget::FilesMore(thread) => rows = files_rows(self.tools.files.read(cx).more_rows(thread)),
             MenuTarget::ChangesScope(diff) => {
                 use ferrite_tools::changes::Row;
-                rows = (self.changes.read(cx).scope_rows(diff).into_iter())
+                rows = (self.tools.changes.read(cx).scope_rows(diff).into_iter())
                     .map(|row| {
                         row.map(|(item, row)| match row {
                             Row::Verb(verb) => (item, MenuVerb::Changes(verb)),
@@ -458,12 +458,12 @@ impl CockpitView {
                     .collect()
             }
             MenuTarget::ChangesMore(diff) => {
-                rows = (self.changes.read(cx).more_rows(diff).into_iter())
+                rows = (self.tools.changes.read(cx).more_rows(diff).into_iter())
                     .map(|row| row.map(|(item, verb)| (item, MenuVerb::Changes(verb))))
                     .collect()
             }
             MenuTarget::ChangesBase(diff) => {
-                rows = (self.changes.read(cx).branch_rows(diff).into_iter())
+                rows = (self.tools.changes.read(cx).branch_rows(diff).into_iter())
                     .map(|(item, verb)| Some((item, MenuVerb::Changes(verb))))
                     .collect()
             }
@@ -471,7 +471,7 @@ impl CockpitView {
             MenuTarget::Details(_) => rows = self.details_menu_rows(),
             MenuTarget::Terminal(_) => {
                 rows = self
-                    .terminals
+                    .tools.terminals
                     .read(cx)
                     .context_rows()
                     .into_iter()
@@ -481,7 +481,7 @@ impl CockpitView {
             MenuTarget::TerminalMore(_) => {
                 use ferrite_tools::terminal::Row;
                 rows = self
-                    .terminals
+                    .tools.terminals
                     .read(cx)
                     .more_rows()
                     .into_iter()
@@ -679,19 +679,19 @@ impl CockpitView {
             (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
             (Submenu::Snooze, _) => Vec::new(),
             (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => self
-                .files
+                .tools.files
                 .read(cx)
                 .sub_rows(thread, sub)
                 .into_iter()
                 .map(|(item, verb)| (item, MenuVerb::Files(verb)))
                 .collect(),
             (Submenu::Files(_), _) => Vec::new(),
-            (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => (self.changes.read(cx).branch_rows(diff).into_iter())
+            (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => (self.tools.changes.read(cx).branch_rows(diff).into_iter())
                 .map(|(item, verb)| (item, MenuVerb::Changes(verb)))
                 .collect(),
             (Submenu::Changes(_), _) => Vec::new(),
             (Submenu::Terminal(sub), _) => self
-                .terminals
+                .tools.terminals
                 .read(cx)
                 .sub_rows(sub)
                 .into_iter()
@@ -1001,7 +1001,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
-                self.files.update(cx, |files, cx| files.run_verb(thread, verb, cx))
+                self.tools.files.update(cx, |files, cx| files.run_verb(thread, verb, cx))
             }
             (
                 MenuTarget::ChangesScope(diff)
@@ -1009,7 +1009,7 @@ impl CockpitView {
                 | MenuTarget::ChangesBase(diff),
                 MenuVerb::Changes(verb),
             ) => self
-                .changes
+                .tools.changes
                 .update(cx, |changes, cx| changes.run_verb(diff, verb, cx)),
             (MenuTarget::BrowserPage(thread), MenuVerb::Browser(verb)) => {
                 self.run_browser_page_verb(thread, verb, cx)

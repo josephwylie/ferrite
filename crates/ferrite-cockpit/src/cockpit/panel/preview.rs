@@ -774,7 +774,7 @@ impl CockpitView {
         };
         let pane = &self.panes[index];
         let owner = pane.identity;
-        self.file_surface
+        self.panel.file_surface
             .update(cx, |files, _| files.forget_document(owner, path));
         if pane.read(cx).preview.document().is_some_and(|document| document.path == path) {
             pane.read(cx).preview.close();
@@ -790,7 +790,7 @@ impl CockpitView {
         cx: &gpui::App,
     ) -> SharedString {
         let named = self
-            .file_surface
+            .panel.file_surface
             .read(cx)
             .document(PaneIdentity::Thread(thread), path)
             .and_then(|document| document.name.clone());
@@ -836,7 +836,7 @@ impl CockpitView {
                     .update(cx, |cockpit, _| cockpit.browser_annotation_image(thread, annotation.clone()));
                 let preview = pane.preview(cx);
                 preview.loading_annotation(annotation.clone(), window);
-                self.file_surface.update(cx, |files, _| {
+                self.panel.file_surface.update(cx, |files, _| {
                     files.wait_annotation(pane.identity, &preview, annotation, image)
                 });
             }
@@ -847,7 +847,7 @@ impl CockpitView {
             .map(|pane| (pane.identity, pane.read(cx).preview.clone()))
             .collect();
         let tended = self
-            .file_surface
+            .panel.file_surface
             .update(cx, |files, _| files.tend(&panes, window));
         if tended.waiting {
             // The image is read on a thread of its own, and only a frame
@@ -886,7 +886,7 @@ impl CockpitView {
             if pane.read(cx).preview.document().is_some_and(|document| document.path == wanted) {
                 continue;
             }
-            let kept = self.file_surface.read(cx).document(pane.identity, &wanted).cloned();
+            let kept = self.panel.file_surface.read(cx).document(pane.identity, &wanted).cloned();
             match kept {
                 Some(document) => pane.read(cx).preview.restore(document),
                 None if wanted == Path::new(BROWSER_PATH) => pane.read(cx).preview.show_browser(),
@@ -938,7 +938,7 @@ impl CockpitView {
     ) -> AnyElement {
         match self.file_surface_inputs(owner, cx) {
             Some(inputs) => self
-                .file_surface
+                .panel.file_surface
                 .update(cx, |files, cx| files.card(inputs, cx)),
             None => div().into_any_element(),
         }
@@ -1038,7 +1038,7 @@ impl CockpitView {
     /// What the File Surface keeps of Pane `index`'s preview.
     #[cfg(test)]
     pub(crate) fn preview_tab<'a>(&self, index: usize, cx: &'a gpui::App) -> &'a PreviewTab {
-        self.file_surface.read(cx).tab_for_test(self.panes[index].identity)
+        self.panel.file_surface.read(cx).tab_for_test(self.panes[index].identity)
     }
 }
 

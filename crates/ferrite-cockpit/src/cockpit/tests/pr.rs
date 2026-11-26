@@ -479,7 +479,7 @@ fn a_thread_pr_restored_on_code_reads_its_diff(cx: &mut TestAppContext) {
         tick(cx);
     }
     let read = view.read_with(cx, |view, cx| {
-        view.changes.read(cx).files_read(Diff::PullRequest(PrTarget::thread(thread, 48)))
+        view.tools.changes.read(cx).files_read(Diff::PullRequest(PrTarget::thread(thread, 48)))
     });
     assert_eq!(read, Some(1), "the restored Code view reads its diff");
 }
@@ -502,7 +502,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     tick(cx);
     click("pr-tab-Code", cx);
     let scope = |diff: Diff, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, cx| view.changes.read(cx).scope_label(diff))
+        view.read_with(cx, |view, cx| view.tools.changes.read(cx).scope_label(diff))
     };
     assert_eq!(
         scope(
@@ -523,7 +523,7 @@ fn a_prs_code_view_reads_the_published_diff(cx: &mut TestAppContext) {
     );
     until(cx, |cx| {
         view.read_with(cx, |view, cx| {
-            view.changes.read(cx).files_read(Diff::PullRequest(ferrite_core::pull_request::PrTarget::thread(
+            view.tools.changes.read(cx).files_read(Diff::PullRequest(ferrite_core::pull_request::PrTarget::thread(
                 thread, 48,
             ))) == Some(1)
         })

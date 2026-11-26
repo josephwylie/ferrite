@@ -43,7 +43,7 @@ impl CockpitView {
     /// (`ferrite_tools::changes::ChangesPane`), which its reader holds.
     pub(in crate::cockpit) fn changes_pane(&self, diff: Diff, cx: &mut Context<Self>) -> Div {
         let inputs = self.changes_inputs(diff);
-        self.changes
+        self.tools.changes
             .update(cx, |changes, cx| changes.pane(diff, inputs, cx))
     }
 
@@ -61,7 +61,7 @@ impl CockpitView {
 
     /// `diff`, made and read the first time it is asked for.
     pub(in crate::cockpit) fn ensure_diff(&mut self, diff: Diff, cx: &mut Context<Self>) {
-        if self.changes.update(cx, |changes, cx| changes.make(diff, cx)) {
+        if self.tools.changes.update(cx, |changes, cx| changes.make(diff, cx)) {
             self.read_diff(diff, false, cx);
         }
     }
@@ -72,7 +72,7 @@ impl CockpitView {
             return;
         };
         let Some((generation, scope)) = self
-            .changes
+            .tools.changes
             .update(cx, |changes, cx| changes.begin_read(diff, keep_shown, cx))
         else {
             return;
@@ -82,7 +82,7 @@ impl CockpitView {
                 let answer = self
                     .cockpit
                     .update(cx, |cockpit, _| cockpit.changes(diff.machine(), origin.root(), scope));
-                self.changes.update(cx, |changes, cx| {
+                self.tools.changes.update(cx, |changes, cx| {
                     changes.wait_local(diff, generation, origin, answer, cx)
                 });
             }
@@ -96,7 +96,7 @@ impl CockpitView {
                         cockpit.review_pull_request_diff(diff.machine(), origin.root(), target.number)
                     })
                 };
-                self.changes.update(cx, |changes, cx| {
+                self.tools.changes.update(cx, |changes, cx| {
                     changes.wait_published(diff, generation, origin, answer, cx)
                 });
             }
@@ -109,13 +109,13 @@ impl CockpitView {
         let Some(origin) = diff.local_thread().and_then(|_| self.changes_origin(diff, cx)) else {
             return;
         };
-        let Some(generation) = self.changes.update(cx, |changes, _| changes.begin_stage(diff)) else {
+        let Some(generation) = self.tools.changes.update(cx, |changes, _| changes.begin_stage(diff)) else {
             return;
         };
         let outcome = self.cockpit.update(cx, |cockpit, _| {
             cockpit.set_file_staged(diff.machine(), origin.root(), path.clone(), stage)
         });
-        self.changes.update(cx, |changes, cx| {
+        self.tools.changes.update(cx, |changes, cx| {
             changes.wait_stage(diff, generation, origin, path, stage, outcome, cx)
         });
     }
@@ -129,7 +129,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.upsert_surface(thread, SurfaceId::Changes, cx);
-        self.changes
+        self.tools.changes
             .update(cx, |changes, cx| changes.reveal(Diff::Changes(thread), path, cx));
     }
 

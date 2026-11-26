@@ -414,7 +414,7 @@ impl CockpitView {
 
     /// Whether the strip is mid-ease: the frame must be drawn again.
     pub(in crate::cockpit) fn tabs_scrolling(&self, cx: &gpui::App) -> bool {
-        self.panel.tabs_scroll.running(cx) || self.files.read(cx).tabs_scrolling(cx)
+        self.panel.tabs_scroll.running(cx) || self.tools.files.read(cx).tabs_scrolling(cx)
     }
 
     /// One tab (T3's `group/tab`, see the module doc).
