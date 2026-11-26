@@ -144,6 +144,11 @@ class SelectionTests(unittest.TestCase):
                 self.assertFalse(result["windows"])
                 self.assertEqual(result["packages"] + result["vendored"], [])
 
+    def test_reasons_name_the_members_a_change_selects_through(self):
+        # A baseline lowered beside the code is not why its packages run.
+        result = select(self.packages, ["crates/ferrite-ui/src/lib.rs", "scripts/tangle.json"])
+        self.assertEqual(result["reasons"], ["changed member: ferrite-ui", "macOS checks input: scripts/tangle.json"])
+
     def test_the_raw_press_baseline_selects_the_macos_checks_only(self):
         for path in ["scripts/check_raw_presses.py", "scripts/raw-presses.json"]:
             with self.subTest(path=path):
