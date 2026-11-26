@@ -6,7 +6,7 @@ pub(super) mod content;
 mod lineage;
 
 use super::*;
-use super::pane_cell::DetailsRead;
+use super::pane_cell::{DetailsRead, PaneAsk, PaneAsks};
 use ferrite_pane::details::{DetailsCard, Density, Standing};
 use ferrite_ui::motion;
 use ferrite_ui::theme::*;
@@ -255,13 +255,16 @@ pub(super) fn lane_width(details: &DetailsCard, inline_open: bool) -> f32 {
     }
 }
 
-/// Draw the thread's context using the canvas placement and available density.
+/// Draw the thread's context using the canvas placement and available
+/// density: `inline_open` as the window holds it, and `choosing` while
+/// its menu is up.
 pub(super) fn card(
     thread: ThreadKey,
     pane: &Entity<PaneView>,
-    inline_open: bool,
+    (inline_open, choosing): (bool, bool),
     details: &DetailsRead,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &mut gpui::App,
 ) -> Option<AnyElement> {
     let canvas = pane.read(cx).details.canvas.get()?;
     let find_open = pane
@@ -325,7 +328,7 @@ pub(super) fn card(
                     }
                 )
             })
-            .child(content.render(thread, density, cx)),
+            .child(content.render(density, asks, cx)),
         move |bounds, _, cx| {
             let height = (f32::from(bounds.size.height) - scrolling_height + 2.).max(0.);
             if measured.borrow_mut().record(density, &key, height) {
@@ -372,32 +375,28 @@ pub(super) fn card(
         .max_h_full()
         .min_w_0()
         .overflow_hidden()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-        )
+        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx: &mut gpui::App| {
+            cx.stop_propagation()
+        })
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+            asks.on(|event: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
-                view.open_context_menu(MenuTarget::Details(thread), event.position, cx);
+                Some(PaneAsk::DetailsMenu { at: event.position })
             }),
         )
-        .on_mouse_down_out(
-            cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                let on_toggle = view
-                    .panes
-                    .iter()
-                    .find(|pane| pane.thread() == Some(thread))
+        .on_mouse_down_out({
+            // A press on the card's opener toggles it, and one in its menu
+            // chooses what it shows: neither shuts it from here. Both are
+            // read as the press lands, before its own listeners act.
+            let opener = pane.downgrade();
+            asks.on(move |event: &MouseDownEvent, _, cx| {
+                let on_toggle = opener
+                    .upgrade()
                     .is_some_and(|pane| pane.read(cx).details.on_opener(event.position));
-                let choosing_items = view
-                    .context_menu()
-                    .is_some_and(|menu| menu.target == MenuTarget::Details(thread));
-                if !inline && !on_toggle && !choosing_items {
-                    view.close_details(thread, window, cx);
-                }
-            }),
-        )
+                (!inline && !on_toggle && !choosing).then_some(PaneAsk::CloseDetails)
+            })
+        })
         .child(body);
     let drawn = pane.read(cx).details.drawn.clone();
     // The measure is inside the card's 1px edge.

@@ -2,13 +2,158 @@
 //! click-to-focus, drop and drag plumbing around `pane::render_pane` (or
 //! `render_draft`), and the controls wired into it. It draws from its Pane,
 //! the client's model, and `CellInputs`: what it reads of the window, read
-//! through `Source` on the root (`CockpitView::cell_inputs`).
+//! through `Source` on the root (`CockpitView::cell_inputs`). What a press
+//! asks of the window is a `PaneEvent` naming the Pane, which its part
+//! emits and the root hears (`CockpitView::on_pane_event`).
 
 use super::details::content::Content;
+use super::parts::PartView;
 use super::subagents::Cards;
+use super::surfaces::SurfaceId;
 use super::*;
 use ferrite_core::activity::Subject;
+use ferrite_core::delegate::DelegateId;
+use ferrite_core::server::ServerId;
+use ferrite_core::SessionControl;
 use ferrite_ui::components::FloatPlace;
+use gpui::{App, WeakEntity};
+
+/// What a press in a Pane's cell asks of the window, for the Pane it names.
+#[derive(Clone, Debug)]
+pub(crate) struct PaneEvent {
+    pub(crate) pane: PaneIdentity,
+    pub(crate) ask: PaneAsk,
+}
+
+/// What a cell's press asks: each with what the press saw, which the root
+/// acts on.
+#[derive(Clone, Debug)]
+pub(crate) enum PaneAsk {
+    /// A left press anywhere on the cell: the Pane takes the focus.
+    Pressed,
+    /// A right press on a Thread's cell, at `at`: its context menu, with
+    /// the window's text selection as it stood, for the menu's Copy.
+    ContextMenu { at: Point<Pixels>, copied: Option<String> },
+    /// Native files dragged onto the Pane's Composer (`true`) or off it.
+    FilesOver(bool),
+    /// Native files dropped on the Pane's Composer, which staged them.
+    FilesDropped,
+    /// A board slot (`source`, its leaf) dragged over this Pane's, the
+    /// pointer at `at`; `bounds` the cell's.
+    SlotDragged {
+        source: ThreadId,
+        at: Point<Pixels>,
+        bounds: gpui::Bounds<Pixels>,
+    },
+    /// A dragged slot (`source`) let go over this Pane's.
+    SlotDropped { source: ThreadId },
+    /// The resume offer's Start a fresh conversation.
+    StartFresh,
+    /// A draft's band chip, or its hero's Project word (`from_hero`): its
+    /// menu.
+    BandMenu { chip: pane::BandChip, from_hero: bool },
+    /// A queued prompt's act, the prompt named by its id.
+    Queued { id: String, act: QueuedAct },
+    /// The send circle: Enter's act.
+    Send,
+    /// Stop: Esc's act.
+    Stop,
+    /// The `+` menu opens (`true`) or shuts.
+    AttachMenu(bool),
+    /// The `+` menu's row `at`: files, a folder, or `/`.
+    AttachPick(usize),
+    /// A Connectors row: its Session control, run on the Session of
+    /// `generation`, or none, which opens the Panel.
+    Connector {
+        generation: u64,
+        act: Option<SessionControl>,
+    },
+    /// A plugin's command, started on the line as a chip.
+    PluginCommand(String),
+    /// The permission mode chip, on the Session of `generation`.
+    ModeMenu { generation: u64 },
+    /// The model chip: the picker opens, or shuts.
+    ModelPicker,
+    /// The details card's context menu, at `at`.
+    DetailsMenu { at: Point<Pixels> },
+    /// A press outside the details card standing over the transcript,
+    /// neither on its opener nor in its menu: the card shuts.
+    CloseDetails,
+    /// A details row: its Surface in the Panel.
+    Surface(SurfaceId),
+    /// The details card's Create PR.
+    CreatePr,
+    /// The watched PR's eye: stop watching `url`.
+    StopWatching { url: String },
+    /// Lineage's `Previous agents` fold.
+    PreviousAgents,
+    /// Lineage's `Show more` previous agents.
+    MorePreviousAgents,
+    /// A Lineage row for a Subject in this Pane: its parent's selects it
+    /// (`parent`), an agent's opens it.
+    Subject { subject: Subject, parent: bool },
+    /// A Lineage row for a Thread elsewhere: the Delegate's, or the
+    /// Thread that delegated this one (`delegator`).
+    Elsewhere {
+        server: ServerId,
+        thread: ThreadId,
+        delegator: bool,
+    },
+    /// An open Delegate's stop.
+    CancelDelegate(DelegateId),
+}
+
+/// A queued prompt's three acts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueuedAct {
+    SendNow,
+    Edit,
+    Remove,
+}
+
+/// Where a cell's presses go: its part, which emits each as a `PaneEvent`
+/// naming the Pane.
+#[derive(Clone)]
+pub(crate) struct PaneAsks {
+    part: WeakEntity<PartView>,
+    pane: PaneIdentity,
+}
+
+impl PaneAsks {
+    pub(crate) fn new(part: WeakEntity<PartView>, pane: PaneIdentity) -> Self {
+        Self { part, pane }
+    }
+
+    /// Ask the window `ask`, for this Pane.
+    pub(crate) fn ask(&self, ask: PaneAsk, cx: &mut App) {
+        let event = PaneEvent {
+            pane: self.pane,
+            ask,
+        };
+        let _ = self.part.update(cx, |_, cx| cx.emit(event));
+    }
+
+    /// A listener that asks what `ask` makes of its event, if anything.
+    pub(crate) fn on<E: ?Sized + 'static>(
+        &self,
+        ask: impl Fn(&E, &mut Window, &mut App) -> Option<PaneAsk> + 'static,
+    ) -> impl Fn(&E, &mut Window, &mut App) + 'static {
+        let asks = self.clone();
+        move |event, window, cx| {
+            if let Some(asked) = ask(event, window, cx) {
+                asks.ask(asked, cx);
+            }
+        }
+    }
+
+    /// A press that stops where it is and asks `ask`.
+    pub(crate) fn press<E: ?Sized + 'static>(&self, ask: PaneAsk) -> impl Fn(&E, &mut Window, &mut App) + 'static {
+        self.on(move |_: &E, _, cx| {
+            cx.stop_propagation();
+            Some(ask.clone())
+        })
+    }
+}
 
 /// What a cell asks the window: its Pane's inputs, at the window's size.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,6 +233,8 @@ pub(crate) struct ThreadInputs {
     /// Its details card stands beside the transcript when there is room
     /// (`ThreadSurfaces::details_inline_open`).
     pub(crate) details_inline_open: bool,
+    /// The details card's menu is up, choosing what the card shows.
+    pub(crate) details_menu_up: bool,
     /// The slot's width as the board laid it out, for a test to read.
     #[cfg(test)]
     pub(crate) cell_width: f32,
@@ -105,11 +252,12 @@ pub(super) fn cell(
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
     details: &DetailsRead,
+    asks: &PaneAsks,
     window: &mut Window,
-    cx: &mut Context<CockpitView>,
+    cx: &mut App,
 ) -> Div {
     let lost = inputs.lost;
-    let cell = live_cell(inputs, pane, model, details, window, cx);
+    let cell = live_cell(inputs, pane, model, details, asks, window, cx);
     match lost {
         Some(machine) => machines::held(cell, format!("machine-lost-{}", machine.get())),
         None => cell,
@@ -121,13 +269,14 @@ fn live_cell(
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
     details: &DetailsRead,
+    asks: &PaneAsks,
     window: &mut Window,
-    cx: &mut Context<CockpitView>,
+    cx: &mut App,
 ) -> Div {
     #[cfg(test)]
     drawn::built_pane(inputs.identity);
-    let (identity, sheet_up) = (inputs.identity, inputs.sheet_up);
-    let content = content(inputs, pane, model, details, window, cx);
+    let sheet_up = inputs.sheet_up;
+    let content = content(inputs, pane, model, details, asks, window, cx);
     if sheet_up {
         return content;
     }
@@ -135,36 +284,12 @@ fn live_cell(
         return content;
     }
     let composer = pane.read(cx).composer.clone();
-    let view = cx.entity().downgrade();
-    let hovered = view.clone();
-    let hover = move |over: bool, _: &mut Window, cx: &mut gpui::App| {
-        let _ = hovered.update(cx, |view, cx| {
-            let next = match (over, view.file_drop_over) {
-                (true, _) => Some(identity),
-                (false, Some(current)) if current == identity => None,
-                (false, current) => current,
-            };
-            if view.file_drop_over != next {
-                view.file_drop_over = next;
-                cx.notify();
-            }
-        });
-    };
+    let (hovered, dropped) = (asks.clone(), asks.clone());
     ferrite_pane::prompt_drop::target(
         content,
         composer,
-        move |_, cx| {
-            let _ = view.update(cx, |view, cx| {
-                view.file_drop_over = None;
-                if let Some(index) = view.index_of(identity) {
-                    view.focus_pane(index, cx);
-                    view.panes[index].update_draft(cx, |draft| draft.band_focus = None);
-                    view.close_composer_menu(cx);
-                    cx.notify();
-                }
-            });
-        },
-        hover,
+        move |_, cx| dropped.ask(PaneAsk::FilesDropped, cx),
+        move |over: bool, _: &mut Window, cx: &mut App| hovered.ask(PaneAsk::FilesOver(over), cx),
     )
 }
 
@@ -173,8 +298,9 @@ fn content(
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
     details: &DetailsRead,
+    asks: &PaneAsks,
     window: &mut Window,
-    cx: &mut Context<CockpitView>,
+    cx: &mut App,
 ) -> Div {
     let CellInputs {
         index,
@@ -196,28 +322,23 @@ fn content(
         .min_w_0()
         .min_h_0()
         .track_focus(&pane.read(cx).controls_focus)
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                view.pointer_down(index, event, window, cx)
-            }),
-        )
+        .on_mouse_down(MouseButton::Left, asks.on(|_: &MouseDownEvent, _, _| Some(PaneAsk::Pressed)))
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                let Some(thread) = view.panes.get(index).and_then(|pane| pane.thread()) else {
-                    return;
-                };
+            asks.on(move |event: &MouseDownEvent, window, cx| {
+                // A draft has no context menu.
+                identity.thread()?;
                 cx.stop_propagation();
                 let copied = gpui::base::TextSelection::selected_text(window, cx)
                     .trim_end_matches('\n')
                     .to_string();
-                view.native_copy = (!copied.is_empty()).then_some(copied);
-                view.focus_pane(index, cx);
-                view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
+                Some(PaneAsk::ContextMenu {
+                    at: event.position,
+                    copied: (!copied.is_empty()).then_some(copied),
+                })
             }),
         );
-    let cell = CockpitView::slot_drop_target(cell, pane_leaf(identity), cx);
+    let cell = slot_drop_target(cell, asks);
     let menu = composer_menu.map(IntoElement::into_any_element);
     let thread_inputs = match kind {
         // A draft Pane (#29): the Composer and its menu instead of a
@@ -227,7 +348,7 @@ fn content(
             // under it, and the hero's words, as wide as the board and
             // centred on it, would read past the edge of any card narrower
             // than them.
-            let start = empty_board::draft_hero(&draft.project, pane, &triggers, cx)
+            let start = empty_board::draft_hero(&draft.project, pane, &triggers, asks, cx)
                 .filter(|_| !sheet_up);
             let toolbar = controls.as_ref().map(|controls| {
                 composer_footer::toolbar(
@@ -238,6 +359,7 @@ fn content(
                     composer_footer::Kind::Draft(&draft),
                     pane,
                     model,
+                    asks,
                     cx,
                 )
             });
@@ -292,7 +414,14 @@ fn content(
         .decisions
         .as_ref()
         .and_then(|cards| cards.render(window, cx));
-    let details_card = details::card(thread, pane, inputs.details_inline_open, details, cx);
+    let details_card = details::card(
+        thread,
+        pane,
+        (inputs.details_inline_open, inputs.details_menu_up),
+        details,
+        asks,
+        cx,
+    );
     let toolbar = controls.as_ref().map(|controls| {
         composer_footer::toolbar(
             index,
@@ -302,10 +431,11 @@ fn content(
             composer_footer::Kind::Thread(thread, &inputs),
             pane,
             model,
+            asks,
             cx,
         )
     });
-    let resume_offer = resume_offer(index, thread, pane, model, cx);
+    let resume_offer = resume_offer(thread, pane, model, asks, cx);
     // The parts above draw with `cx`; the facts read the model after.
     let Some(open) = model.read(cx).thread(thread) else {
         return cell;
@@ -362,11 +492,11 @@ fn content(
 /// The offer to go on in a fresh conversation, while the Thread's provider
 /// has none to resume. It says what the way on costs.
 fn resume_offer(
-    index: usize,
     thread: ThreadKey,
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &mut App,
 ) -> Option<AnyElement> {
     if !pane.read(cx).is_main() {
         return None;
@@ -382,12 +512,19 @@ fn resume_offer(
         cx,
     )
     .debug_selector(move || format!("resume-fresh-{key}"))
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |view, _: &MouseDownEvent, window, cx| {
-            cx.stop_propagation();
-            view.start_fresh_conversation(index, thread, window, cx);
-        }),
-    );
+    .on_mouse_down(MouseButton::Left, asks.press(PaneAsk::StartFresh));
     Some(pane::resume_offer(key, line.into(), action))
+}
+
+/// The cell as a drop target for a board slot dragged by its head: the
+/// moves over it ask for the preview, the release for the drop.
+fn slot_drop_target(cell: Div, asks: &PaneAsks) -> Div {
+    cell.on_drag_move(asks.on(|event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
+        Some(PaneAsk::SlotDragged {
+            source: event.drag(cx).leaf,
+            at: event.event.position,
+            bounds: event.bounds,
+        })
+    }))
+    .on_drop(asks.on(|drag: &PaneDrag, _, _| Some(PaneAsk::SlotDropped { source: drag.leaf })))
 }

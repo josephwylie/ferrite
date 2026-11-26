@@ -4,8 +4,9 @@
 //!
 //! A Pane's view (`PartView`) reads what its cell draws of the window
 //! through `Source` (`cell_inputs`), then draws the cell by calling back
-//! into the Cockpit (`render_part`), whose listeners are still the
-//! Cockpit's own; the nav draws only what it last read of the Cockpit
+//! into the Cockpit (`render_part`). What a press in the cell asks of the
+//! window it emits as a `PaneEvent` naming the Pane, which the Cockpit
+//! hears (`on_pane_event`); the nav draws only what it last read of the Cockpit
 //! (`NavView::look`), which it reads again as the Cockpit notifies or the
 //! client's model says something `Arrived`, so it redraws only when that
 //! moved. Each is mounted
@@ -32,9 +33,14 @@ use gpui::{
 };
 
 use super::pane_cell::{
-    CellAsk, CellInputs, ControlsInputs, DraftInputs, KindInputs, ThreadInputs,
+    CellAsk, CellInputs, ControlsInputs, DraftInputs, KindInputs, PaneAsk, PaneAsks, PaneEvent,
+    QueuedAct, ThreadInputs,
 };
-use super::CockpitView;
+use super::popups::Popup;
+use super::surfaces::SurfaceAction;
+use super::{CockpitView, MenuTarget, Submit};
+use ferrite_core::ThreadKey;
+use gpui::{Focusable, SharedString};
 use ferrite_ui::source::Source;
 
 /// A part of the Cockpit drawn as a cached view of its own.
@@ -65,11 +71,14 @@ impl Render for PartView {
         let Some(inputs) = self.inputs.read(&ask, cx) else {
             return div().into_any_element();
         };
+        let asks = PaneAsks::new(cx.entity().downgrade(), self.pane);
         self.cockpit
-            .update(cx, |view, cx| view.render_part(inputs, window, cx))
+            .update(cx, |view, cx| view.render_part(inputs, &asks, window, cx))
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
+
+impl gpui::EventEmitter<PaneEvent> for PartView {}
 
 /// The parts' views and what each was last mounted with.
 #[derive(Default)]
@@ -102,7 +111,9 @@ impl CockpitView {
         }
     }
 
-    fn part_view(&self, pane: PaneIdentity, cx: &mut Context<Self>) -> Entity<PartView> {
+    /// `pane`'s view, made the first time it is drawn: the Cockpit hears
+    /// what its cell asks for as long as it lives.
+    fn part_view(&self, pane: PaneIdentity, window: &Window, cx: &mut Context<Self>) -> Entity<PartView> {
         if let Some(view) = self.parts.borrow().views.get(&pane) {
             return view.clone();
         }
@@ -110,6 +121,7 @@ impl CockpitView {
         let inputs = Source::of(&root, |root: &Self, ask: &CellAsk, cx| root.cell_inputs(ask, cx));
         let cockpit = root.downgrade();
         let view = cx.new(|_| PartView { cockpit, pane, inputs });
+        cx.subscribe_in(&view, window, Self::on_pane_event).detach();
         self.parts.borrow_mut().views.insert(pane, view.clone());
         view
     }
@@ -125,7 +137,7 @@ impl CockpitView {
     }
 
     /// A Pane's cell on the board: its part, cached with parts on.
-    pub(super) fn pane_slot(&self, index: usize, _window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn pane_slot(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let identity = self.panes[index].identity;
         // The box `pane_content`'s cell has on the board.
         let frame = div()
@@ -135,7 +147,7 @@ impl CockpitView {
             .flex_1()
             .min_w_0()
             .min_h_0();
-        let view = self.part_view(identity, cx);
+        let view = self.part_view(identity, window, cx);
         if !self.parts.borrow().on {
             return frame.child(view);
         }
@@ -171,8 +183,15 @@ impl CockpitView {
         parts.views.retain(|identity, _| open.contains(identity));
     }
 
-    /// What a Pane's view draws: its cell, from `inputs`.
-    fn render_part(&self, inputs: CellInputs, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// What a Pane's view draws: its cell, from `inputs`, its presses
+    /// asking through `asks`.
+    fn render_part(
+        &self,
+        inputs: CellInputs,
+        asks: &PaneAsks,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(index) = self.index_of(inputs.identity) else {
             return div().into_any_element();
         };
@@ -185,8 +204,201 @@ impl CockpitView {
             .size_full()
             .flex()
             .flex_col()
-            .child(super::pane_cell::cell(inputs, &pane, &model, &details, window, cx))
+            .child(super::pane_cell::cell(inputs, &pane, &model, &details, asks, window, cx))
             .into_any_element()
+    }
+
+    /// What Pane `event.pane`'s cell asks (`PaneAsk`): each the act its
+    /// press made when the cell drew with the Cockpit's own listeners, run
+    /// in the same effect cycle as the press, before the next frame. A
+    /// Pane gone since the press asks nothing of its own.
+    fn on_pane_event(
+        &mut self,
+        _: &Entity<PartView>,
+        event: &PaneEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let identity = event.pane;
+        // Native files and board slots speak for their drag, which may
+        // have outlived the Pane under it.
+        match event.ask.clone() {
+            PaneAsk::FilesOver(over) => {
+                let next = match (over, self.file_drop_over) {
+                    (true, _) => Some(identity),
+                    (false, Some(current)) if current == identity => None,
+                    (false, current) => current,
+                };
+                if self.file_drop_over != next {
+                    self.file_drop_over = next;
+                    cx.notify();
+                }
+                return;
+            }
+            PaneAsk::FilesDropped => self.file_drop_over = None,
+            PaneAsk::SlotDragged { source, at, bounds } => {
+                return self.slot_dragged(source, super::pane_leaf(identity), at, bounds, cx);
+            }
+            PaneAsk::SlotDropped { source } => {
+                return self.drop_pane(source, super::pane_leaf(identity), cx);
+            }
+            _ => {}
+        }
+        let Some(index) = self.index_of(identity) else {
+            return;
+        };
+        let composer = self.panes[index].read(cx).composer.clone();
+        match event.ask.clone() {
+            PaneAsk::Pressed => self.pointer_down(index, cx),
+            PaneAsk::FilesDropped => {
+                self.focus_pane(index, cx);
+                self.panes[index].update_draft(cx, |draft| draft.band_focus = None);
+                self.close_composer_menu(cx);
+                cx.notify();
+            }
+            PaneAsk::BandMenu { chip, from_hero } => {
+                self.focus_pane(index, cx);
+                self.open_band_menu(chip, from_hero, cx);
+            }
+            PaneAsk::Send => {
+                self.focus_pane(index, cx);
+                // A press on the circle sends, wherever tab left the ring.
+                self.panes[index].update_draft(cx, |draft| draft.band_focus = None);
+                window.focus(&composer.read(cx).focus_handle(cx), cx);
+                self.submit(&Submit, window, cx);
+            }
+            PaneAsk::Stop => {
+                self.focus_pane(index, cx);
+                window.focus(&composer.read(cx).focus_handle(cx), cx);
+                if let Some(thread) = identity.thread() {
+                    self.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
+                    self.facts.acted(self.cockpit.read(cx), thread);
+                    cx.notify();
+                }
+            }
+            PaneAsk::AttachMenu(true) => {
+                self.focus_pane(index, cx);
+                let focus = cx.focus_handle();
+                self.show_popup(Popup::Attach { pane: identity, focus }, cx);
+            }
+            PaneAsk::AttachMenu(false) => {
+                if self.attach_menu_focus(identity).is_some() {
+                    self.close_popup(cx);
+                }
+            }
+            PaneAsk::AttachPick(at) => {
+                match at {
+                    0 => self.attach_files(index, false, cx),
+                    1 => self.attach_files(index, true, cx),
+                    _ => composer.update(cx, |composer, cx| composer.insert("/", cx)),
+                }
+                cx.notify();
+            }
+            PaneAsk::PluginCommand(token) => {
+                composer.update(cx, |composer, cx| {
+                    composer.insert(&format!("{token} "), cx);
+                    composer.stage_chip(SharedString::from(token), cx);
+                });
+                cx.notify();
+            }
+            PaneAsk::ModelPicker => {
+                self.focus_pane(index, cx);
+                if self.model_picker_open(identity) {
+                    self.close_popup(cx);
+                } else {
+                    self.open_model_picker(identity, super::model_picker::Column::List, cx);
+                }
+            }
+            ask => {
+                if let Some(thread) = identity.thread() {
+                    self.on_thread_pane_ask(index, thread, ask, window, cx);
+                }
+            }
+        }
+    }
+
+    /// What Thread Pane `index`'s cell asks for `thread`: what only a
+    /// Thread's cell draws.
+    fn on_thread_pane_ask(
+        &mut self,
+        index: usize,
+        thread: ThreadKey,
+        ask: PaneAsk,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match ask {
+            PaneAsk::ContextMenu { at, copied } => {
+                self.native_copy = copied;
+                self.focus_pane(index, cx);
+                self.open_context_menu(MenuTarget::Pane(thread), at, cx);
+            }
+            PaneAsk::StartFresh => self.start_fresh_conversation(index, thread, window, cx),
+            PaneAsk::Queued { id, act } => {
+                self.focus_pane(index, cx);
+                let focus = self.panes[index].read(cx).composer.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                self.cockpit.update(cx, |cockpit, _| match act {
+                    QueuedAct::SendNow => cockpit.send_queued_now(thread, &id),
+                    QueuedAct::Edit => cockpit.edit_queued_item(thread, &id),
+                    QueuedAct::Remove => cockpit.remove_queued_item(thread, &id, false),
+                });
+                self.facts.acted(self.cockpit.read(cx), thread);
+                cx.notify();
+            }
+            PaneAsk::Connector { generation, act } => {
+                match act {
+                    Some(act) => self.run_session_control(thread, generation, act, cx),
+                    None => self.open_panel(thread, cx),
+                }
+                cx.notify();
+            }
+            PaneAsk::ModeMenu { generation } => {
+                self.focus_pane(index, cx);
+                self.toggle_mode_menu(thread, generation, cx);
+            }
+            PaneAsk::DetailsMenu { at } => {
+                self.open_context_menu(MenuTarget::Details(thread), at, cx);
+            }
+            PaneAsk::CloseDetails => self.close_details(thread, window, cx),
+            PaneAsk::Surface(surface) => self.upsert_surface(thread, surface, cx),
+            PaneAsk::CreatePr => self.create_pr(thread, cx),
+            PaneAsk::StopWatching { url } => self.watch_pr(thread, url, false, cx),
+            PaneAsk::PreviousAgents => {
+                self.apply_surface(thread, SurfaceAction::TogglePreviousAgents);
+                cx.notify();
+            }
+            PaneAsk::MorePreviousAgents => {
+                self.panes[index].read(cx).details.show_more();
+                cx.notify();
+            }
+            PaneAsk::Subject { subject, parent: true } => {
+                self.select_subject(thread, subject, window, cx);
+            }
+            PaneAsk::Subject { subject, parent: false } => self.open_subagent(thread, subject, cx),
+            PaneAsk::Elsewhere {
+                server,
+                thread: there,
+                delegator,
+            } => match delegator {
+                true => self.open_delegator(&server, there, cx),
+                false => self.open_elsewhere(&server, there, cx),
+            },
+            PaneAsk::CancelDelegate(delegate) => self.cancel_delegate(thread, delegate, cx),
+            // A draft's or a drag's, heard above.
+            PaneAsk::Pressed
+            | PaneAsk::FilesOver(_)
+            | PaneAsk::FilesDropped
+            | PaneAsk::SlotDragged { .. }
+            | PaneAsk::SlotDropped { .. }
+            | PaneAsk::BandMenu { .. }
+            | PaneAsk::Send
+            | PaneAsk::Stop
+            | PaneAsk::AttachMenu(_)
+            | PaneAsk::AttachPick(_)
+            | PaneAsk::PluginCommand(_)
+            | PaneAsk::ModelPicker => {}
+        }
     }
 
     /// What Pane `ask.pane`'s cell draws of the window rather than of its
@@ -325,6 +537,9 @@ impl CockpitView {
                 .map(|facts| (facts.project_label.clone(), facts.branch.clone())),
             decisions,
             details_inline_open: self.details_inline_open(index),
+            details_menu_up: self
+                .context_menu()
+                .is_some_and(|menu| menu.target == super::MenuTarget::Details(thread)),
             // The slot's width as the board laid it out this frame (a
             // dragged seam included), else the Pane's rect's.
             #[cfg(test)]

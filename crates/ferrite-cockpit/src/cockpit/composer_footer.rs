@@ -4,10 +4,11 @@
 //! view): what they keep is the Pane's own (its Composer) and the popup
 //! slot's (the `+` menu's focus, `Popup::Attach`; the mode menu,
 //! `Popup::Mode`), and what they show is the Thread's, which the root reads
-//! (`composer_toolbar`). Here they are drawn from what was read; each
-//! press acts through the root.
+//! (`pane_cell::ControlsInputs`). Here they are drawn from what was read;
+//! each press asks the root by a `PaneEvent` (`pane_cell::PaneAsk`).
 
-use super::pane_cell::{ControlsInputs, DraftInputs, ThreadInputs};
+use super::pane_cell::{ControlsInputs, DraftInputs, PaneAsk, PaneAsks, QueuedAct, ThreadInputs};
+use gpui::App;
 use super::*;
 use ferrite_core::{ControlKind, McpStatus, SessionControl};
 
@@ -34,26 +35,26 @@ pub(super) fn toolbar(
     kind: Kind<'_>,
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &mut App,
 ) -> pane::ComposerControls {
     let (running, line_empty) = running_and_empty(identity.thread(), pane, model, cx);
     let queue = identity
         .thread()
-        .map_or_else(Vec::new, |thread| queue_acts(index, thread, model, running, cx));
+        .map_or_else(Vec::new, |thread| queue_acts(thread, model, running, asks, cx));
     let attach = {
         let open_thread = identity
             .thread()
             .and_then(|thread| Some((thread, model.read(cx).thread(thread)?)));
         AttachMenu::of(
             index,
-            identity,
             controls.attach_focus.clone(),
             pane.read(cx).composer.focus_handle(cx),
             controls.attach_place,
-            open_thread.as_ref().map(|(thread, open)| (*thread, open)),
+            open_thread.as_ref().map(|(_, open)| open),
         )
     };
-    let attach = attach.render(cx);
+    let attach = attach.render(asks, cx);
     let (env, mut words, mode, ring, waits) = match kind {
         Kind::Draft(draft) => {
             // A draft has no Session to ask: its mode is the one a new
@@ -72,8 +73,8 @@ pub(super) fn toolbar(
                 )
             });
             (
-                Some(band_chips(draft, triggers, pane, cx)),
-                draft_model_chip(identity, controls, triggers, pane, model, cx)
+                Some(band_chips(draft, triggers, pane, asks, cx)),
+                draft_model_chip(identity, controls, triggers, pane, model, asks, cx)
                     .into_iter()
                     .collect::<Vec<_>>(),
                 Some(draft_mode_word(index, &draft.mode)),
@@ -107,13 +108,13 @@ pub(super) fn toolbar(
                     cx,
                 )
             });
-            let chip = open.and_then(|open| ModeChip::of(index, thread, open, inputs.mode_menu_up));
+            let chip = open.and_then(|open| ModeChip::of(thread, open, inputs.mode_menu_up));
             (
                 env,
-                model_chip(identity, thread, controls, triggers, model, cx)
+                model_chip(identity, thread, controls, triggers, model, asks, cx)
                     .into_iter()
                     .collect(),
-                chip.map(|chip| chip.render(triggers.record(mode_menu::chip_trigger(thread)), cx)),
+                chip.map(|chip| chip.render(triggers.record(mode_menu::chip_trigger(thread)), asks, cx)),
                 ring.map(IntoElement::into_any_element),
                 false,
             )
@@ -124,9 +125,9 @@ pub(super) fn toolbar(
     words.extend(mode);
     pane::ComposerControls {
         attach: Some(attach),
-        stop: stop_button(index, running, line_empty, cx),
+        stop: stop_button(running, line_empty, asks, cx),
         // A draft waiting on a copy is sent there once it is in.
-        send: send_button(index, running, line_empty, cx).filter(|_| !waits),
+        send: send_button(running, line_empty, asks, cx).filter(|_| !waits),
         footer: Some(pane::composer_footer(model_word, words, ring).into_any_element()),
         env: env
             .filter(|chips: &Vec<AnyElement>| !chips.is_empty())
@@ -152,18 +153,17 @@ fn running_and_empty(
 /// The draft's setup chips (#29) — Project and Workspace, and where it
 /// runs — for the strip over the Composer (`env_strip`), wired to their
 /// popovers, which hang above them (`band_menu_element`). A chip click
-/// shares `open_band_popover` with ↵ on a tab-focused chip; the closure
-/// re-finds the Pane by its Composer, a draft's one stable identity.
+/// shares `open_band_popover` with ↵ on a tab-focused chip.
 fn band_chips(
     inputs: &DraftInputs,
     triggers: &popups::Triggers,
     pane: &Entity<PaneView>,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &App,
 ) -> Vec<AnyElement> {
     let Some(draft) = pane.read(cx).draft() else {
         return Vec::new();
     };
-    let composer = pane.read(cx).composer.clone();
     let (workspace_mark, workspace_label) = match draft.binding.target() {
         DraftTarget::Main => (ferrite_ui::icons::FOLDER, SharedString::from("Current checkout")),
         DraftTarget::Branch { name } => (ferrite_ui::icons::BRANCH, SharedString::from(name.clone())),
@@ -201,22 +201,14 @@ fn band_chips(
     ]);
     let chips = chips.map(|(chip, slot, mark, label)| {
         let focused = draft.band_focus == Some(chip);
-        let chip_composer = composer.clone();
+        // The chip is this Pane's: the root lands on it first, then
+        // toggles. The press stops here, so the root's dismissal cannot
+        // close what it opens.
         let chip_element = pane::band_chip(slot, mark, label, focused).on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                // The chip is this Pane's: land on it first, then toggle —
-                // and stop the press so the root's dismissal cannot close
-                // what this just opened.
-                cx.stop_propagation();
-                if let Some(at) = view
-                    .panes
-                    .iter()
-                    .position(|pane| pane.read(cx).composer == chip_composer)
-                {
-                    view.focus_pane(at, cx);
-                }
-                view.open_band_menu(chip, false, cx);
+            asks.press(PaneAsk::BandMenu {
+                chip,
+                from_hero: false,
             }),
         );
         ferrite_ui::components::on_bounds(chip_element, triggers.record(band_trigger(chip)))
@@ -241,7 +233,8 @@ fn draft_model_chip(
     triggers: &popups::Triggers,
     pane: &Entity<PaneView>,
     model: &Entity<Cockpit>,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &App,
 ) -> Option<AnyElement> {
     let draft = pane.read(cx).draft()?;
     let provider = draft.binding.provider().provider;
@@ -281,7 +274,7 @@ fn draft_model_chip(
         cx,
     )
     .tip_unless_open(picker_up, "Model and effort");
-    Some(model_picker::chip_control(identity, control, triggers, cx))
+    Some(model_picker::chip_control(identity, control, triggers, asks))
 }
 
 /// The Thread's model chip: the model it runs and the effort in force,
@@ -295,7 +288,8 @@ fn model_chip(
     controls: &ControlsInputs,
     triggers: &popups::Triggers,
     model: &Entity<Cockpit>,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &App,
 ) -> Option<AnyElement> {
     let open = model.read(cx).thread(thread)?;
     let provider = open.provider();
@@ -322,20 +316,19 @@ fn model_chip(
         .debug_selector(move || format!("model-picker-{key}"))
         .tip_unless_open(picker_up, hold.unwrap_or("Model and effort"))
         .child(face);
-    Some(model_picker::chip_control(identity, control, triggers, cx))
+    Some(model_picker::chip_control(identity, control, triggers, asks))
 }
 
-/// The queue strip's acts on Pane `index`, each row's own, aimed at its
+/// The queue strip's acts on `thread`'s Pane, each row's own, aimed at its
 /// message by its id: send now sends it next (`send_queued_now`), edit is
 /// ↑'s act and remove ⌫'s — neither while Codex steers it.
-pub(super) fn queue_acts(
-    index: usize,
+fn queue_acts(
     thread: ThreadKey,
     model: &Entity<Cockpit>,
     running: bool,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
+    cx: &App,
 ) -> Vec<Vec<AnyElement>> {
-    type Act = fn(&mut Cockpit, ThreadKey, &str);
     // What each queued item offers, read before the buttons are made.
     let queue: Vec<_> = model
         .read(cx)
@@ -353,34 +346,15 @@ pub(super) fn queue_acts(
         .into_iter()
         .enumerate()
         .map(|(at, (id, takes_back, sends_now))| {
-            let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
-                (
-                    sends_now.then(|| pane::queued_send_now(at, cx)),
-                    |cockpit, thread, id| cockpit.send_queued_now(thread, id),
-                ),
-                (
-                    takes_back.then(|| pane::queued_edit(at, cx)),
-                    |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
-                ),
-                (
-                    takes_back.then(|| pane::queued_close(at, cx)),
-                    |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
-                ),
+            let acts = [
+                (sends_now.then(|| pane::queued_send_now(at, cx)), QueuedAct::SendNow),
+                (takes_back.then(|| pane::queued_edit(at, cx)), QueuedAct::Edit),
+                (takes_back.then(|| pane::queued_close(at, cx)), QueuedAct::Remove),
             ];
             acts.into_iter()
                 .filter_map(|(button, act)| {
                     let id = id.clone();
-                    let button = button?.on_click(cx.listener(
-                        move |view, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            view.focus_pane(index, cx);
-                            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
-                            window.focus(&focus, cx);
-                            view.cockpit.update(cx, |cockpit, _| act(cockpit, thread, &id));
-                            view.facts.acted(view.cockpit.read(cx), thread);
-                            cx.notify();
-                        },
-                    ));
+                    let button = button?.on_click(asks.press(PaneAsk::Queued { id, act }));
                     Some(button.into_any_element())
                 })
                 .collect()
@@ -388,55 +362,25 @@ pub(super) fn queue_acts(
         .collect()
 }
 
-/// The send circle on Pane `index`: Enter's act, steering a running turn.
-/// The box's stands only once there is something to send (an empty box
-/// shows none).
-pub(super) fn send_button(
-    index: usize,
-    running: bool,
-    empty: bool,
-    cx: &mut Context<CockpitView>,
-) -> Option<AnyElement> {
+/// The send circle: Enter's act, steering a running turn. The box's
+/// stands only once there is something to send (an empty box shows none).
+fn send_button(running: bool, empty: bool, asks: &PaneAsks, cx: &App) -> Option<AnyElement> {
     if !pane::primary_actions(running, empty).send {
         return None;
     }
     let button = pane::send_button(running, empty, cx)
-        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            view.focus_pane(index, cx);
-            // A press on the circle sends, wherever tab left the ring.
-            view.panes[index].update_draft(cx, |draft| draft.band_focus = None);
-            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
-            view.submit(&Submit, window, cx);
-        }))
+        .on_click(asks.press(PaneAsk::Send))
         .into_any_element();
     Some(button)
 }
 
-/// Stop on Pane `index`, while the turn runs: Esc's act, which keeps what
-/// is typed.
-pub(super) fn stop_button(
-    index: usize,
-    running: bool,
-    empty: bool,
-    cx: &mut Context<CockpitView>,
-) -> Option<AnyElement> {
+/// Stop, while the turn runs: Esc's act, which keeps what is typed.
+fn stop_button(running: bool, empty: bool, asks: &PaneAsks, cx: &App) -> Option<AnyElement> {
     if !pane::primary_actions(running, empty).stop {
         return None;
     }
     let button = pane::stop_button(cx)
-        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            view.focus_pane(index, cx);
-            let focus = view.panes[index].read(cx).composer.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
-            if let Some(thread) = view.panes[index].thread() {
-                view.cockpit.update(cx, |cockpit, _| cockpit.interrupt(thread));
-                view.facts.acted(view.cockpit.read(cx), thread);
-                cx.notify();
-            }
-        }))
+        .on_click(asks.press(PaneAsk::Stop))
         .into_any_element();
     Some(button)
 }
@@ -447,7 +391,6 @@ pub(super) fn stop_button(
 /// `Connectors ›` and `Plugins ›`.
 pub(super) struct AttachMenu {
     index: usize,
-    pane: PaneIdentity,
     /// The menu's focus while it is up.
     open: Option<FocusHandle>,
     /// The Composer's, which the keyboard goes back to.
@@ -462,7 +405,6 @@ pub(super) struct AttachMenu {
 /// one, else open the Panel, where Connectors live — as `Manage connectors`
 /// does.
 struct Connectors {
-    thread: ThreadKey,
     generation: u64,
     choices: Vec<ferrite_ui::components::Choice>,
     acts: Vec<Option<SessionControl>>,
@@ -480,16 +422,14 @@ impl AttachMenu {
     /// stands, if it has one.
     pub(super) fn of(
         index: usize,
-        pane: PaneIdentity,
         open: Option<FocusHandle>,
         return_focus: FocusHandle,
         place: ferrite_ui::components::FloatPlace,
-        thread: Option<(ThreadKey, &ThreadView)>,
+        thread: Option<&ThreadView>,
     ) -> Self {
-        let connectors = thread.and_then(|(thread, open)| {
+        let connectors = thread.and_then(|open| {
             let servers = open.transcript().mcp_servers();
             (!servers.is_empty()).then(|| Connectors {
-                thread,
                 generation: open.generation(),
                 acts: servers
                     .iter()
@@ -530,7 +470,7 @@ impl AttachMenu {
             })
         });
         let plugins = thread
-            .map(|(_, open)| plugins(open.commands()))
+            .map(|open| plugins(open.commands()))
             .unwrap_or_default()
             .into_iter()
             .map(|(name, commands)| Plugin {
@@ -543,7 +483,6 @@ impl AttachMenu {
             .collect();
         Self {
             index,
-            pane,
             open,
             return_focus,
             place,
@@ -552,10 +491,9 @@ impl AttachMenu {
         }
     }
 
-    pub(super) fn render(self, cx: &mut Context<CockpitView>) -> AnyElement {
+    pub(super) fn render(self, asks: &PaneAsks, cx: &mut App) -> AnyElement {
         let Self {
             index,
-            pane: identity,
             open,
             return_focus,
             place,
@@ -581,10 +519,9 @@ impl AttachMenu {
             ..Default::default()
         })
         .collect();
-        let weak = cx.entity().downgrade();
-        let picker = weak.clone();
+        let (opens, picks) = (asks.clone(), asks.clone());
         ferrite_ui::menu::ChoiceMenu {
-            submenus: submenus(index, connectors, plugins, cx),
+            submenus: submenus(connectors, plugins, asks),
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
             hang_left: true,
             id: SharedString::from(format!("attach-menu-{index}")),
@@ -592,31 +529,9 @@ impl AttachMenu {
             choices,
             open,
             return_focus,
-            on_open: std::rc::Rc::new(move |open, _, cx| {
-                let _ = weak.update(cx, |view, cx| {
-                    if open {
-                        view.focus_pane(index, cx);
-                        let focus = cx.focus_handle();
-                        view.show_popup(Popup::Attach { pane: identity, focus }, cx);
-                    } else if view.attach_menu_focus(identity).is_some() {
-                        view.close_popup(cx);
-                    }
-                });
-            }),
+            on_open: std::rc::Rc::new(move |open, _, cx| opens.ask(PaneAsk::AttachMenu(open), cx)),
             // The kit closes the menu after every pick.
-            on_pick: std::rc::Rc::new(move |at, _, cx| {
-                let _ = picker.update(cx, |view, cx| {
-                    match at {
-                        0 => view.attach_files(index, false, cx),
-                        1 => view.attach_files(index, true, cx),
-                        _ => view.panes[index]
-                            .read(cx).composer
-                            .clone()
-                            .update(cx, |composer, cx| composer.insert("/", cx)),
-                    }
-                    cx.notify();
-                });
-            }),
+            on_pick: std::rc::Rc::new(move |at, _, cx| picks.ask(PaneAsk::AttachPick(at), cx)),
             // Over the box, as the `/` menu stands, hanging from the `+`'s
             // left edge (Claude's), never out over the nav.
             place: Some(place),
@@ -634,20 +549,18 @@ impl AttachMenu {
 /// Claude's `+` menu reaches nothing else Ferrite could back: a
 /// plugin the CLI loads with no commands has nothing to pick.
 fn submenus(
-    index: usize,
     connectors: Option<Connectors>,
     plugins: Vec<Plugin>,
-    cx: &mut Context<CockpitView>,
+    asks: &PaneAsks,
 ) -> Vec<ferrite_ui::menu::Submenu> {
     let mut submenus = Vec::new();
     if let Some(Connectors {
-        thread,
         generation,
         choices,
         acts,
     }) = connectors
     {
-        let view = cx.entity().downgrade();
+        let asks = asks.clone();
         submenus.push(ferrite_ui::menu::Submenu {
             icon: Some((ferrite_ui::icons::BLOCKS, ferrite_ui::theme::INK_STRONG)),
             label: "Connectors".into(),
@@ -657,18 +570,11 @@ fn submenus(
             width: ferrite_ui::theme::ATTACH_MENU_W,
             on_pick: std::rc::Rc::new(move |at, _, cx| {
                 let act = acts.get(at).cloned().flatten();
-                let _ = view.update(cx, |view, cx| {
-                    match act {
-                        Some(act) => view.run_session_control(thread, generation, act, cx),
-                        None => view.open_panel(thread, cx),
-                    }
-                    cx.notify();
-                });
+                asks.ask(PaneAsk::Connector { generation, act }, cx);
             }),
         });
     }
     if !plugins.is_empty() {
-        let view = cx.entity().downgrade();
         let submenus_per_plugin = plugins
             .into_iter()
             .map(|plugin| {
@@ -689,7 +595,7 @@ fn submenus(
                         ..Default::default()
                     })
                     .collect();
-                let view = view.clone();
+                let asks = asks.clone();
                 ferrite_ui::menu::Submenu {
                     icon: None,
                     label: plugin.name.into(),
@@ -703,14 +609,7 @@ fn submenus(
                         let Some(name) = names.get(at) else {
                             return;
                         };
-                        let token = format!("/{name}");
-                        let _ = view.update(cx, |view, cx| {
-                            view.panes[index].read(cx).composer.clone().update(cx, |composer, cx| {
-                                composer.insert(&format!("{token} "), cx);
-                                composer.stage_chip(SharedString::from(token), cx);
-                            });
-                            cx.notify();
-                        });
+                        asks.ask(PaneAsk::PluginCommand(format!("/{name}")), cx);
                     }),
                 }
             })
@@ -737,7 +636,6 @@ fn submenus(
 /// (`mode_menu.rs`); ⇧⇥ still cycles (`cycle_mode`). A Session that cannot
 /// switch modes shows the chip without a menu.
 pub(super) struct ModeChip {
-    index: usize,
     thread: ThreadKey,
     generation: u64,
     mode: String,
@@ -749,20 +647,14 @@ pub(super) struct ModeChip {
 }
 
 impl ModeChip {
-    /// The chip on Pane `index` for `open`, the Pane's Thread.
-    pub(super) fn of(
-        index: usize,
-        thread: ThreadKey,
-        open: &ThreadView,
-        menu_up: bool,
-    ) -> Option<Self> {
+    /// The chip for `open`, the Pane's Thread.
+    pub(super) fn of(thread: ThreadKey, open: &ThreadView, menu_up: bool) -> Option<Self> {
         let modes = open.permission_modes();
         if modes.is_empty() && open.permission_mode().is_none() {
             return None;
         }
         let mode = open.permission_mode().unwrap_or("default").to_string();
         Some(Self {
-            index,
             thread,
             generation: open.generation(),
             label: pane::permission_mode_label(&mode, &modes),
@@ -777,13 +669,11 @@ impl ModeChip {
     pub(super) fn render(
         self,
         bounds: impl FnOnce(gpui::Bounds<Pixels>, &mut Window, &mut gpui::App) + 'static,
-        cx: &mut Context<CockpitView>,
+        asks: &PaneAsks,
+        cx: &App,
     ) -> AnyElement {
         let Self {
-            index,
-            thread,
-            generation,
-            ..
+            thread, generation, ..
         } = self;
         let key = thread.thread().get() as usize;
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
@@ -800,14 +690,7 @@ impl ModeChip {
         if !self.switches {
             return wrap(trigger.into_any_element());
         }
-        let trigger = trigger.on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.focus_pane(index, cx);
-                view.toggle_mode_menu(thread, generation, cx);
-            }),
-        );
+        let trigger = trigger.on_mouse_down(MouseButton::Left, asks.press(PaneAsk::ModeMenu { generation }));
         wrap(ferrite_ui::components::on_bounds(div().flex().child(trigger), bounds).into_any_element())
     }
 }

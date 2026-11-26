@@ -240,30 +240,19 @@ pub(super) fn chip_trigger(pane: PaneIdentity) -> SharedString {
     format!("model-chip-{pane:?}").into()
 }
 
-/// A model chip as a control: a press opens its Pane's picker, or shuts
-/// it, and the chip records where it stands for the picker to hang from.
-/// The press stops there, so the root's dismissal never undoes it.
+/// A model chip as a control: a press asks for its Pane's picker, or its
+/// shutting (`PaneAsk::ModelPicker`), and the chip records where it stands
+/// for the picker to hang from. The press stops there, so the root's
+/// dismissal never undoes it.
 pub(super) fn chip_control(
     identity: PaneIdentity,
     chip: gpui::component::button::Button,
     triggers: &popups::Triggers,
-    cx: &mut Context<CockpitView>,
+    asks: &super::pane_cell::PaneAsks,
 ) -> AnyElement {
-    let chip = chip.group(chip_trigger(identity)).on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-            cx.stop_propagation();
-            let Some(index) = view.index_of(identity) else {
-                return;
-            };
-            view.focus_pane(index, cx);
-            if view.model_picker_open(identity) {
-                view.close_popup(cx);
-            } else {
-                view.open_model_picker(identity, Column::List, cx);
-            }
-        }),
-    );
+    let chip = chip
+        .group(chip_trigger(identity))
+        .on_mouse_down(MouseButton::Left, asks.press(super::pane_cell::PaneAsk::ModelPicker));
     ferrite_ui::components::on_bounds(
         div().flex().min_w_0().child(chip),
         triggers.record(chip_trigger(identity)),

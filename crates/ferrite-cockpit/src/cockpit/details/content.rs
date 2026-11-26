@@ -1,4 +1,5 @@
 use super::lineage::Lineage;
+use super::super::pane_cell::{PaneAsk, PaneAsks};
 use super::*;
 use ferrite_core::settings::ContextCardItem;
 use ferrite_pane::details::Density;
@@ -143,9 +144,9 @@ impl Content {
 
     pub(super) fn render(
         &self,
-        thread: ThreadKey,
         density: Density,
-        cx: &mut Context<CockpitView>,
+        asks: &PaneAsks,
+        cx: &gpui::App,
     ) -> Div {
         let rows: Vec<_> = self
             .rows
@@ -175,9 +176,9 @@ impl Content {
                     .child("Choose what to show")
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        asks.on(|event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
-                            view.open_context_menu(MenuTarget::Details(thread), event.position, cx);
+                            Some(PaneAsk::DetailsMenu { at: event.position })
                         }),
                     ),
             );
@@ -208,10 +209,10 @@ impl Content {
             if group_lineage {
                 content = content.child(self.lineage.render(
                     block,
-                    thread,
                     self.provider,
                     self.previous_open,
                     self.previous_pages,
+                    asks,
                     cx,
                 ));
                 continue;
@@ -244,7 +245,7 @@ impl Content {
                         let eye = block
                             .watched
                             .clone()
-                            .map(|url| watch_eye(thread, block.number, url, cx));
+                            .map(|url| watch_eye(block.number, url, asks));
                         pr_view(control, block, eye)
                     }
                     None => control
@@ -307,18 +308,23 @@ impl Content {
                     control = control
                         .cursor_pointer()
                         .hover(|style| style.bg(rgba(0xffffff14)))
-                        .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            match &action {
-                                Action::Reveal(path) => {
-                                    ferrite_pane::preview::open_original(path, window, cx)
+                        .on_click({
+                            // Reveal is the file's own; the rest ask the
+                            // window.
+                            let asks = asks.clone();
+                            move |_: &ClickEvent, window, cx: &mut gpui::App| {
+                                cx.stop_propagation();
+                                match &action {
+                                    Action::Reveal(path) => {
+                                        ferrite_pane::preview::open_original(path, window, cx)
+                                    }
+                                    Action::Surface(surface) => {
+                                        asks.ask(PaneAsk::Surface(surface.clone()), cx)
+                                    }
+                                    Action::CreatePr => asks.ask(PaneAsk::CreatePr, cx),
                                 }
-                                Action::Surface(surface) => {
-                                    view.upsert_surface(thread, surface.clone(), cx)
-                                }
-                                Action::CreatePr => view.create_pr(thread, cx),
                             }
-                        }));
+                        });
                 }
                 block = block.child(control);
             }
@@ -613,12 +619,7 @@ pub(super) const WATCHING_TIP: &str = "Watching: the agent wakes when checks fin
 
 /// A watched PR's eye, as T3's `ThreadDetailsPrRow` draws it: an eye,
 /// slashed while the pointer is on it, whose press only stops the watch.
-fn watch_eye(
-    thread: ThreadKey,
-    number: u64,
-    url: String,
-    cx: &mut Context<CockpitView>,
-) -> AnyElement {
+fn watch_eye(number: u64, url: String, asks: &PaneAsks) -> AnyElement {
     let group = SharedString::from("details-pr-watch");
     let glyph = |path, shown: bool| {
         let layer = div().absolute().inset_0().child(icon(path, 14., INK_SUBTLE));
@@ -647,10 +648,7 @@ fn watch_eye(
                         .child(glyph(icons::EYE, true))
                         .child(glyph(icons::EYE_OFF, false)),
                 )
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.watch_pr(thread, url.clone(), false, cx);
-                })),
+                .on_click(asks.press(PaneAsk::StopWatching { url })),
         )
         .into_any_element()
 }

@@ -5998,13 +5998,7 @@ impl CockpitView {
     /// the standing selection was already cleared by the root's capture
     /// handler, and the root's bubble handler dismisses any open selector —
     /// this Pane included.
-    fn pointer_down(
-        &mut self,
-        index: usize,
-        _event: &MouseDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn pointer_down(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(pane) = self.panes.get_mut(index) {
             pane.update(cx, |pane, _| pane.clear_tool_target());
         }
@@ -7096,37 +7090,41 @@ impl CockpitView {
     /// A board slot as a drop target for a reader dragged by its head: the
     /// moves over it compute the preview, the release applies it.
     fn slot_drop_target(cell: Div, target: Leaf, cx: &mut Context<Self>) -> Div {
-        // gpui hands every drag move to every listener, not just the one
-        // under the pointer: a slot only previews while the pointer is
-        // inside it, and drops its own preview once the pointer has left —
-        // else the first slot crossed keeps saying "split left" while the
-        // drag is somewhere else.
-        fn left(view: &mut CockpitView, target: Leaf, cx: &mut Context<CockpitView>) {
-            if view
-                .drop_preview
-                .is_some_and(|(previewed, _)| previewed == target)
-            {
-                view.drop_preview = None;
-                cx.notify();
-            }
-        }
         cell.on_drag_move(
             cx.listener(move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
                 let source = event.drag(cx).leaf;
-                if view.dragging != Some(source) {
-                    view.dragging = Some(source);
-                    cx.notify();
-                }
-                if event.bounds.contains(&event.event.position) {
-                    view.preview_pane_drop(source, target, event.event.position, event.bounds, cx);
-                } else {
-                    left(view, target, cx);
-                }
+                view.slot_dragged(source, target, event.event.position, event.bounds, cx);
             }),
         )
         .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
             view.drop_pane(drag.leaf, target, cx);
         }))
+    }
+
+    /// Slot `source`, dragged by its head, moved with the pointer at `at`
+    /// while `target`'s slot stood at `bounds`. gpui hands every drag move
+    /// to every listener, not just the one under the pointer: a slot only
+    /// previews while the pointer is inside it, and drops its own preview
+    /// once the pointer has left — else the first slot crossed keeps
+    /// saying "split left" while the drag is somewhere else.
+    fn slot_dragged(
+        &mut self,
+        source: Leaf,
+        target: Leaf,
+        at: gpui::Point<Pixels>,
+        bounds: gpui::Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dragging != Some(source) {
+            self.dragging = Some(source);
+            cx.notify();
+        }
+        if bounds.contains(&at) {
+            self.preview_pane_drop(source, target, at, bounds, cx);
+        } else if self.drop_preview.is_some_and(|(previewed, _)| previewed == target) {
+            self.drop_preview = None;
+            cx.notify();
+        }
     }
 
     /// The size a slot was laid out at this frame, for its ghost.

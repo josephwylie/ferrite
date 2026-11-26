@@ -154,20 +154,17 @@ pub(super) fn draft_hero(
     project: &SharedString,
     pane: &Entity<PaneView>,
     triggers: &popups::Triggers,
-    cx: &mut Context<CockpitView>,
+    asks: &super::pane_cell::PaneAsks,
+    cx: &gpui::App,
 ) -> Option<pane::Hero> {
     pane.read(cx).draft()?;
-    let composer = pane.read(cx).composer.clone();
+    // The press stops here, so the root's dismissal cannot close what it
+    // opens.
     let word = pane::hero_project(project.clone(), true).on_mouse_down(
         MouseButton::Left,
-        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-            // Stop the press so the root's dismissal cannot close what
-            // this opens.
-            cx.stop_propagation();
-            if let Some(at) = view.panes.iter().position(|pane| pane.read(cx).composer == composer) {
-                view.focus_pane(at, cx);
-            }
-            view.open_band_menu(pane::BandChip::Project, true, cx);
+        asks.press(super::pane_cell::PaneAsk::BandMenu {
+            chip: pane::BandChip::Project,
+            from_hero: true,
         }),
     );
     Some(pane::Hero::Project(
