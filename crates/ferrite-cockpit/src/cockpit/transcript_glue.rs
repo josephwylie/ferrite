@@ -593,7 +593,7 @@ impl CockpitView {
         let entity = self.panes[index]
             .update(cx, |pane, cx| pane.ensure_transcript(cx))
             .expect("thread Pane has a transcript entity");
-        if self.transcript_entities.insert(entity.entity_id()) {
+        if self.panes[index].hear(entity.entity_id()) {
             cx.subscribe(&entity, Self::transcript_event).detach();
         }
         // One reading size for every transcript, on every board.
@@ -748,9 +748,7 @@ impl CockpitView {
             .filter(|subject| activity.subject(subject).is_some_and(|subject| !subject.retained()))
             .collect();
         for subject in evicted {
-            if let Some(transcript) = self.panes[index].update(cx, |pane, _| pane.release_transcript(&subject)) {
-                self.transcript_entities.remove(&transcript.entity_id());
-            }
+            self.panes[index].release_transcript(&subject, cx);
         }
     }
 
