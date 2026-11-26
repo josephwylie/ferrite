@@ -455,6 +455,9 @@ struct Local {
     refuse: bool,
     /// Refuses every link, as a Windows Server did before it made them.
     refuse_links: bool,
+    /// Once it has cancelled, the line drops: no reply is heard again,
+    /// though what was asked was done.
+    drops_once_cancelled: bool,
 }
 
 impl Local {
@@ -467,6 +470,7 @@ impl Local {
             cancel: None,
             refuse: false,
             refuse_links: false,
+            drops_once_cancelled: false,
         }
     }
 
@@ -519,6 +523,9 @@ impl Exchange for Local {
     }
 
     fn answer(&mut self, asked: Asked) -> io::Result<Reply> {
+        if self.drops_once_cancelled && self.cancel.as_ref().is_some_and(|(_, _, after)| self.counted >= *after) {
+            return Err(io::Error::new(io::ErrorKind::ConnectionReset, "The connection to the server closed"));
+        }
         while let Some((id, reply)) = self.replies.pop_front() {
             if id == asked.id() {
                 return reply;
@@ -598,6 +605,38 @@ fn a_copy_cancelled_as_its_last_replies_come_stays_unfinished() {
     let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
     assert_eq!((resumed.written, changed), (0, Vec::<String>::new()), "nothing left to send");
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+}
+
+/// A first copy cancelled once the Machine took its first file, the line
+/// dropping before that file's replies are heard: what landed there is
+/// not known to be nothing, so the copy is kept as unfinished, and its
+/// Resume finds that file there.
+#[test]
+fn a_copy_whose_line_drops_as_its_cancel_is_heard_stays_unfinished() {
+    let dir = scratch("cancelled-dropped");
+    let (source, dest, kept) = (dir.join("app"), dir.join("there/app"), dir.join("machine"));
+    fs::create_dir_all(&source).unwrap();
+    for at in 0..3 {
+        fs::write(source.join(format!("file-{at}.txt")), format!("{at}")).unwrap();
+    }
+    let job = CopyJob {
+        source: &source,
+        dest: &dest,
+        skip: &[],
+        kept: &kept,
+    };
+    let cancel = Cancellation::default();
+    let mut dropping = Local {
+        drops_once_cancelled: true,
+        ..Local::cancelling_once_finished(&cancel, 1)
+    };
+    let stopped = copy(&job, &mut dropping, &mut |_| {}, &cancel).expect_err("cancelled part way");
+    assert!(dest.join("file-0.txt").is_file(), "the Machine took the first file");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "kept as unfinished");
+    assert!(!stopped.took_nothing(), "its replies were never heard: {stopped:?}");
+
+    let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
+    assert_eq!((resumed.written, changed), (2, Vec::<String>::new()), "the rest, and only the rest");
 }
 
 /// A copy stopped part way is kept as unfinished, on this computer, from

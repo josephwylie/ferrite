@@ -139,7 +139,10 @@ Windows window.
   send never holds a write slot of its connection. A send that stops
   returns `Stopped { error, sent }`: the error names the entry whose
   request it answered, and `sent` is what was taken there once the replies
-  already on their way are heard, unless the line itself is down. What was
+  already on their way are heard, unless the line itself is down. A line
+  that goes while they are heard is what the send stopped for, so a
+  `Stopped` whose error is not the line's has heard every reply: a copy
+  cancelled as its line went never reads as having landed nothing. What was
   asked after it may still be taken there, since every step is whole on its
   own, and an `answer` passes over replies nobody waited for, so the
   connection carries on. `mirror` asks for the scan there, scans here while

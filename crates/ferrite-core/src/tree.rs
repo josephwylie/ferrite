@@ -967,12 +967,14 @@ impl<'a> Flight<'a> {
 
     /// The send stops for `error`, with what was taken there once the
     /// replies already on their way are heard, a refusal among them passed
-    /// over. A line that is down is not waited on again.
-    fn stop(&mut self, error: io::Error) -> Stopped {
-        if !line_down(&error) {
-            while !self.waiting.is_empty() {
-                if self.hear().is_err_and(|error| line_down(&error)) {
-                    break;
+    /// over. A line that is down is not waited on again: once it goes
+    /// while they are heard, the send stops for that, since what was asked
+    /// may have been taken there unheard.
+    fn stop(&mut self, mut error: io::Error) -> Stopped {
+        while !line_down(&error) && !self.waiting.is_empty() {
+            if let Err(lost) = self.hear() {
+                if line_down(&lost) {
+                    error = lost;
                 }
             }
         }
