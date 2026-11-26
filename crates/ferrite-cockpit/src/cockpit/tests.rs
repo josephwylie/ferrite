@@ -474,7 +474,22 @@ fn without_checkouts(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContex
     cx.run_until_parked();
 }
 
+/// A folder in no git repository, for a Thread's checkout: git has nothing
+/// to say of it, so no read of it starts git, and no test reads whatever
+/// branch the checkout running the tests is on. Named as the folder the
+/// tests run in, `ferrite-cockpit`, which its Project is named for.
+fn plain_folder(name: &str) -> std::path::PathBuf {
+    let dir = scratch(&format!("{name}-checkout")).join("ferrite-cockpit");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
+    cockpit_in(name, panes, &plain_folder(name))
+}
+
+/// `cockpit`, its Threads in `checkout`.
+fn cockpit_in(name: &str, panes: usize, checkout: &std::path::Path) -> (Cockpit, Fake) {
     let fake = Fake::default();
     let dir = scratch(name);
     let store = Store::open(&dir).unwrap();
@@ -484,7 +499,7 @@ fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     let now = ferrite_core::clock::now_stamp();
     for _ in 0..panes {
         let thread = cockpit
-            .open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .open(cockpit.first_machine(), Provider::Claude, WorkspaceChoice::Main { checkout: checkout.to_path_buf() })
             .unwrap();
         did_something_at(&dir, thread, &now);
     }

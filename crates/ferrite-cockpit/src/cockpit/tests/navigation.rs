@@ -284,7 +284,10 @@ fn deferred_preview_follows_its_pane_after_reflow(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("deferred-preview-reflow", 3);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let source = view.read_with(cx, |view, _| view.panes[1].identity);
+    let checkout = view.read_with(cx, |view, cx| view.thread_path(source.thread().unwrap(), cx).unwrap());
+    let path = checkout.join("Cargo.toml");
+    std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"), &path).unwrap();
     let source = view.update(cx, |view, cx| {
         let first = view.panes[0].identity;
         let source = view.panes[1].identity;

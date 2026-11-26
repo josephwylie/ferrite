@@ -27,6 +27,26 @@ pub(super) fn checkout_dirs(cwd: &Path) -> Option<(&Path, PathBuf)> {
     Some((root, root.join(pointer.trim().strip_prefix("gitdir:")?.trim())))
 }
 
+/// Whether git finds no repository at `cwd`, as its own search does: no
+/// folder from `cwd` up holds a `.git` or is a git dir itself, and no
+/// `GIT_DIR` names one. Every read of a checkout fails there, so its
+/// caller answers as that failure would without starting git.
+pub(super) fn outside_any_repository(cwd: &Path) -> bool {
+    if std::env::var_os("GIT_DIR").is_some() {
+        return false;
+    }
+    let Ok(cwd) = std::path::absolute(cwd) else {
+        return false;
+    };
+    !cwd.ancestors().any(|dir| dir.join(".git").exists() || is_git_dir(dir))
+}
+
+/// A git dir as git knows one, a bare repository's included: its `HEAD`,
+/// objects and refs.
+fn is_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+}
+
 /// What the `HEAD` in git dir `admin` says.
 fn head_said(admin: &Path) -> Option<String> {
     let mut said = fs::read_to_string(admin.join("HEAD")).ok()?.trim().to_string();

@@ -138,8 +138,36 @@ fn world<'a>(
     more: bool,
     cx: &'a mut TestAppContext,
 ) -> (World, &'a mut gpui::VisualTestContext) {
-    let (mut core, _fake) = cockpit(name, panes);
+    let (core, _fake) = cockpit(name, panes);
     let repo = repo_in(&scratch(&format!("{name}-repo")));
+    world_of(core, repo, rows, more, cx)
+}
+
+/// `world`, its one Thread in the Project's repository, whose origin is on
+/// GitHub: a link to one of its PRs is the Thread's own.
+fn world_in_repo<'a>(
+    name: &str,
+    rows: Vec<WirePrRow>,
+    cx: &'a mut TestAppContext,
+) -> (World, &'a mut gpui::VisualTestContext) {
+    let repo = repo_in(&scratch(&format!("{name}-repo")));
+    let origin = std::process::Command::new("git")
+        .args(["remote", "add", "origin", "https://github.com/operator/repo.git"])
+        .current_dir(&repo)
+        .output()
+        .expect("git");
+    assert!(origin.status.success(), "git remote add: {origin:?}");
+    let (core, _fake) = cockpit_in(name, 1, &repo);
+    world_of(core, repo, rows, false, cx)
+}
+
+fn world_of<'a>(
+    mut core: Cockpit,
+    repo: std::path::PathBuf,
+    rows: Vec<WirePrRow>,
+    more: bool,
+    cx: &'a mut TestAppContext,
+) -> (World, &'a mut gpui::VisualTestContext) {
     let project = core.register_project(core.first_machine(), &repo).now().unwrap();
     let path = core.registry(core.first_machine()).project(project.project()).unwrap().root.clone();
     let roots: Vec<_> = core
@@ -405,7 +433,7 @@ fn the_footer_keeps_a_threads_own_pr_and_the_palette_opens_the_list(cx: &mut Tes
 
 #[gpui::test]
 fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mut TestAppContext) {
-    let (world, cx) = world("pr-transcript-number", 1, two_rows(), false, cx);
+    let (world, cx) = world_in_repo("pr-transcript-number", two_rows(), cx);
     let thread = world
         .view
         .read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
@@ -436,7 +464,7 @@ fn a_transcript_pr_keeps_the_conversation_and_loads_the_requested_number(cx: &mu
 
 #[gpui::test]
 fn a_bare_pr_reference_uses_the_contextual_panel(cx: &mut TestAppContext) {
-    let (world, cx) = world("pr-bare-number", 1, two_rows(), false, cx);
+    let (world, cx) = world_in_repo("pr-bare-number", two_rows(), cx);
     let thread = world
         .view
         .read_with(cx, |view, cx| view.cockpit.read(cx).threads()[0]);
