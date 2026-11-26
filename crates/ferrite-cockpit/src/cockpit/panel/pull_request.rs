@@ -298,3 +298,49 @@ impl CockpitView {
 pub(super) fn pr_more_door(target: PrTarget) -> Door {
     Door::new(MenuTarget::PrMore(target), Edge::Right)
 }
+
+impl CockpitView {
+    /// Open the Thread's PR in its browser preview. An explicit open: the
+    /// Thread comes forward first, so the page is the one shown.
+    pub(crate) fn open_pr(&mut self, thread: ThreadKey, cx: &mut Context<Self>) {
+        let url = self.facts.pr(thread).and_then(|pr| pr.url.clone());
+        if let Some(url) = url {
+            self.show_thread(thread, cx);
+            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
+        }
+    }
+
+    /// The Thread's PR as a link target: the one every door to it opens.
+    pub(crate) fn pr_target(&self, thread: ThreadKey) -> Option<LinkTarget> {
+        self.facts.pr(thread).map(|pr| LinkTarget::PullRequest {
+            thread: thread.thread(),
+            number: pr.number,
+            url: pr.url.clone(),
+        })
+    }
+
+    /// An explicit open of the Thread's PR, by the door `how` names: its
+    /// native detail, the integrated browser, or the system's. What cannot
+    /// open says why.
+    pub(crate) fn open_pr_as(
+        &mut self,
+        thread: ThreadKey,
+        how: Open,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.pr_target(thread) else {
+            return;
+        };
+        let address = target.address();
+        match (how, address) {
+            (Open::Primary, _) => {
+                self.show_thread(thread, cx);
+                self.open_pr_surface(thread, cx);
+            }
+            (Open::Integrated, Ok(_)) => self.open_pr(thread, cx),
+            (Open::System, Ok(url)) => cx.open_url(&url),
+            (_, Err(why)) => ferrite_pane::link_target::notify_unavailable(&why, window, cx),
+        }
+    }
+}

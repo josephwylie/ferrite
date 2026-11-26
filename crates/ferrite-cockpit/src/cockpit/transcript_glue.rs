@@ -1216,6 +1216,93 @@ impl CockpitView {
     }
 }
 
+impl CockpitView {
+    /// A quote chip's Go to source: the Pane's transcript scrolls to the
+    /// message it was cited from, or the chip says that message is gone.
+    pub(super) fn composer_comment_opened(&mut self, composer: Entity<Composer>, opened: &ferrite_pane::composer::CommentOpened, cx: &mut Context<Self>) {
+        let Some(reply) = composer.read(cx).replies().get(opened.index).cloned() else { return; };
+        let Some(source) = reply.source else { return; };
+        let Some(transcript) = self.panes.iter().find(|pane| pane.read(cx).composer == composer && pane.thread().is_some_and(|key| key.thread() == source.thread)).and_then(|pane| pane.read(cx).transcript()) else { return; };
+        let Some((document, mut keys)) = transcript.read(cx).comment_source(source.block) else { return; };
+        let selector = gpui::base::TextSelectionSelector {
+            text: reply.quote,
+            start: reply.selector.as_ref().map_or(0, |selector| selector.start),
+            end: reply.selector.as_ref().map_or(0, |selector| selector.end),
+            prefix: reply.selector.as_ref().map_or_else(String::new, |selector| selector.prefix.clone()),
+            suffix: reply.selector.as_ref().map_or_else(String::new, |selector| selector.suffix.clone()),
+        };
+        if let Some(part) = reply.selector.as_ref().map(|selector| selector.part) {
+            if part < keys.len() { keys.swap(0, part); }
+        }
+        let window = opened.window;
+        let index = opened.index;
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let anchors = keys.iter().filter_map(|key| document.anchor_text(key, &selector, window, cx)).collect::<Vec<_>>();
+                if anchors.len() == 1 {
+                    composer.update(cx, |composer, cx| composer.highlight_comment_source(index, anchors.into_iter().next().unwrap(), cx));
+                }
+            });
+        });
+    }
+
+    pub(super) fn composer_opens_source(
+        &mut self,
+        composer: Entity<Composer>,
+        OpenSource { source, quote }: &OpenSource,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.panes.iter().find(|pane| pane.read(cx).composer == composer) else {
+            return;
+        };
+        let found = pane.thread().is_some_and(|key| key.thread() == source.thread)
+            && pane.read(cx).transcript().is_some_and(|transcript| {
+                transcript.update(cx, |transcript, cx| transcript.reveal_passage(source.block, quote, cx))
+            });
+        if !found {
+            composer.update(cx, |composer, cx| composer.source_missing(*source, cx));
+        }
+    }
+
+    /// Take the offer: the Thread goes on in a fresh conversation, and what
+    /// the failed send gave back to the Composer goes out through the same
+    /// path ↵ takes.
+    pub(super) fn start_fresh_conversation(
+        &mut self,
+        index: usize,
+        thread: ThreadKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cockpit.read(cx).thread(thread).is_some_and(|open| open.resume_lost()) {
+            return;
+        }
+        let pane = self.panes[index].identity;
+        let asked = self.cockpit.update(cx, |cockpit, _| cockpit.start_fresh_conversation(thread));
+        self.when_answered_in(
+            asked,
+            window,
+            move |view, answered, window, cx| {
+                cx.notify();
+                if let Err(error) = answered {
+                    view.cockpit.update(cx, |cockpit, _| {
+                        cockpit.say(thread, format!("could not start a fresh conversation: {error}"))
+                    });
+                    return;
+                }
+                let Some(index) = view.index_of(pane) else {
+                    return;
+                };
+                view.focus_pane(index, cx);
+                if !view.panes[index].read(cx).composer.read(cx).is_empty() {
+                    view.submit(&Submit, window, cx);
+                }
+            },
+            cx,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::failure_words;

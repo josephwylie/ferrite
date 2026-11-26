@@ -1039,3 +1039,104 @@ impl CockpitView {
             .then(|| self.composer_menu.clone())
     }
 }
+
+impl CockpitView {
+    /// What the open floats make of each Composer: the open popover widens
+    /// its Composer's key context to ComposerMenu (the focused node, where
+    /// enter and escape win their tie against Submit and Interrupt), and the
+    /// lit caret — Solo's and the focused board Pane's block (FL-12) —
+    /// blinks under any open float; an unfocused board Pane's is the hollow
+    /// box. Pushed on the Cockpit's own notify (`observe_self`), before the
+    /// frame draws, so the Pane a float opens over is built once in that
+    /// frame rather than again in the next; render repeats it for state it
+    /// derives itself. Each push notifies only on a change.
+    pub(super) fn sync_composer_floats(&self, cx: &mut Context<Self>) {
+        let focused_index = self.focused(cx);
+        let float_open = self.overlay_open(cx);
+        let menu_on = self
+            .composer_menu
+            .read(cx)
+            .pane()
+            .or_else(|| self.band_menu().map(|open| open.pane));
+        for (index, pane) in self.panes.iter().enumerate() {
+            let open = menu_on == Some(pane.identity);
+            let lit = index == focused_index;
+            pane.composer(cx).update(cx, |composer, cx| {
+                composer.set_menu_open(open, cx);
+                composer.set_caret_lit(lit, float_open, cx);
+            });
+        }
+    }
+
+    /// The focused Composer's line moved: unmute and re-derive the menu.
+    /// Menus follow the text — typing `/` or `@` opens, backspacing past
+    /// the trigger closes, and a pick's own splice closes through here too.
+    pub(super) fn composer_edited(&mut self, composer: Entity<Composer>, _: &Edited, cx: &mut Context<Self>) {
+        let machine = self
+            .panes
+            .iter()
+            .position(|pane| pane.read(cx).composer == composer)
+            .and_then(|index| self.pane_machine(index, cx));
+        if let Some(machine) = machine {
+            self.upload_attachments(&composer, machine, cx);
+        }
+        if let Some(index) = self.panes.iter().position(|pane| pane.read(cx).composer == composer) {
+            self.panes[index].update_draft(cx, |draft| draft.error = None);
+        }
+        // The `/` and `$` menus read one listing: only a line with neither
+        // at the caret lets it go.
+        let state = composer.read(cx);
+        if slash_token(state.text(), state.cursor()).is_none()
+            && skill_token(state.text(), state.cursor()).is_none()
+        {
+            self.draft_commands.forget();
+        }
+        // The API reports it as the Thread's `draft` (ADR 0030), so no
+        // agent types over the operator.
+        let unsent = !state.is_empty();
+        if let Some(identity) = self
+            .panes
+            .iter()
+            .find(|pane| pane.read(cx).composer == composer)
+            .map(|pane| pane.identity)
+        {
+            if let Some(thread) = identity.thread() {
+                self.cockpit.update(cx, |cockpit, _| cockpit.set_composing(thread, unsent));
+            }
+            self.keep_draft(identity, cx);
+        }
+        // A picker or a band chip is not text-derived (#11, #25, #29):
+        // writing a prompt on its line dismisses it — while the clearing
+        // splice that opened it leaves the line empty, and keeps it. The
+        // project chip is the exception: its rows read the line as the
+        // type-a-path row, so edits re-derive it instead.
+        let edited = self
+            .panes
+            .iter()
+            .find(|pane| pane.read(cx).composer == composer)
+            .map(|pane| pane.identity);
+        let band = self
+            .band_menu()
+            .filter(|open| Some(open.pane) == edited)
+            .map(|open| open.kind.chip);
+        if band == Some(pane::BandChip::Project) {
+            self.sync_band_rows(cx);
+        } else if band.is_some() && !composer.read(cx).is_empty() {
+            self.close_popup(cx);
+        }
+        let popover_on = self.composer_menu.read(cx).pane();
+        if self.composer_menu.update(cx, |menu, cx| menu.edited(cx)) {
+            self.sync_menu(cx);
+        }
+        // A keystroke redraws its own Pane (its line, its menu); only a
+        // menu moving to another Pane redraws more.
+        let menu_moved = [popover_on, self.composer_menu.read(cx).pane()]
+            .into_iter()
+            .flatten()
+            .any(|pane| Some(pane) != edited);
+        match edited {
+            Some(edited) if !menu_moved => self.notify_part(parts::Part::Pane(edited), cx),
+            _ => cx.notify(),
+        }
+    }
+}
