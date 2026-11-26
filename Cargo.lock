@@ -2436,6 +2436,7 @@ dependencies = [
 name = "ferrite-factory"
 version = "0.4.0"
 dependencies = [
+ "ferrite-client",
  "ferrite-core",
  "ferrite-pane",
  "ferrite-ui",

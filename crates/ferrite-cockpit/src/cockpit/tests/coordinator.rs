@@ -4,7 +4,7 @@
 //! world's own Factory answers as a Server's would (it starts no Thread).
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::workflows::Surface;
+use ferrite_factory::board::Surface;
 use ferrite_engine::factory::Command;
 use ferrite_core::factory_board::{Act, Catalog, ProposalStatus};
 
@@ -76,7 +76,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
         view.factory()
             .unwrap()
             .read(cx)
-            .picks
+            .picks()
             .iter()
             .position(|(_, pick)| {
                 *pick
@@ -110,7 +110,7 @@ fn the_coordinator_is_empty_until_the_operator_speaks(cx: &mut TestAppContext) {
         let coordinator = board.coordinator(project.project()).unwrap();
         assert!(coordinator.starting, "the Factory starts it");
         assert!(board.tasks.is_empty(), "talking starts nothing");
-        let field = view.factory().unwrap().read(cx).coordinator.read(cx).field.clone();
+        let field = view.factory().unwrap().read(cx).coordinator().read(cx).field().clone();
         assert_eq!(field.read(cx).text(), "", "sent");
     });
 }
@@ -190,8 +190,8 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
     click(cx, "proposal-p-1-open");
     view.read_with(cx, |view, cx| {
         let factory = view.factory().unwrap().read(cx);
-        assert_eq!(factory.surface, Surface::Board);
-        assert_eq!(factory.open.as_deref(), Some(task.as_str()));
+        assert_eq!(factory.surface(), Surface::Board);
+        assert_eq!(factory.open().map(String::as_str), Some(task.as_str()));
     });
 }
 
@@ -227,6 +227,6 @@ fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut Test
     view.read_with(cx, |view, cx| {
         let factory = view.factory().expect("the Factory shows").read(cx);
         assert_eq!(view.factory_project(), Some(project));
-        assert_eq!(factory.surface, Surface::Coordinator);
+        assert_eq!(factory.surface(), Surface::Coordinator);
     });
 }

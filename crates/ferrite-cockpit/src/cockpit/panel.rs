@@ -432,7 +432,7 @@ impl CockpitView {
         self.browser_review.update(cx, |review, _| review.retain_threads(keep));
         self.facts.retain_threads(keep);
         self.decisions.update(cx, |decisions, _| decisions.retain_threads(keep));
-        if let Some(archive) = self.factory().map(|view| view.read(cx).archive.clone()) {
+        if let Some(archive) = self.factory().map(|view| view.read(cx).archive().clone()) {
             archive.update(cx, |archive, _| archive.retain_threads(keep));
         }
         self.pr_reads.retain_threads(keep);
@@ -455,7 +455,7 @@ impl CockpitView {
             + self
                 .factory()
                 .map_or(0, |view| {
-                    let reading = view.read(cx).archive.read(cx).reading;
+                    let reading = view.read(cx).archive().read(cx).reading;
                     usize::from(reading.is_some_and(|(held, _)| held == thread))
                 })
             + usize::from(self.pr_reads.holds(thread))

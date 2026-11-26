@@ -22,7 +22,7 @@ impl CockpitView {
                 _ => return,
             }
         };
-        self.update_factory(cx, |view, _| view.note = note);
+        self.update_factory(cx, |view, _| view.set_note(note));
         cx.notify();
     }
 }

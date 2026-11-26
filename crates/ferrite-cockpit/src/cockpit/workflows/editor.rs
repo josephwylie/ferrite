@@ -54,12 +54,12 @@ impl CockpitView {
                 })
                 .collect(),
             installed: provider
-                .and_then(|provider| view.skills.installed(provider))
+                .and_then(|provider| view.skills().installed(provider))
                 .map(<[_]>::to_vec),
             skills_note: provider
-                .map(|provider| view.skills.note(provider))
+                .map(|provider| view.skills().note(provider))
                 .unwrap_or_default(),
-            starts: view.starts.clone(),
+            starts: view.starts().clone(),
         })
     }
 

@@ -4,7 +4,7 @@
 //! what the window names and raises is what is on screen.
 #[allow(unused_imports)]
 use super::*;
-use crate::cockpit::workflows::Surface;
+use ferrite_factory::board::Surface;
 use ferrite_engine::factory::Command;
 use ferrite_core::factory_board::{Board, Status, Task, Template};
 
@@ -92,11 +92,12 @@ fn every_column(project: ProjectId) -> Board {
     }
 }
 
-/// V1, V2: at 1440x900 with the sidebar open the six columns fit; with a
-/// Task's panel open, opening a Task brings its column into view; Clear
-/// and the panel are inside the window either way.
+/// V1, V2: at 1440x900 with the sidebar open the six columns fit the board
+/// the window measures for them, and with a Task's panel open its card,
+/// the panel and the head's buttons are inside the window. How the columns
+/// share the board and follow the open Task is `ferrite_factory::board`'s.
 #[gpui::test]
-fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppContext) {
+fn the_board_fits_the_window_beside_the_sidebar_and_the_panel(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-board", 1);
     let project = core.project_of(core.threads()[0]).unwrap();
     core.fixture_factory(every_column(project.project()));
@@ -127,90 +128,25 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
         "{clear:?}"
     );
 
-    for open in ["t-4", "t-6", "t-1"] {
-        view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), open, cx));
-        tick(cx);
-        tick(cx);
-        let panel = bounds(cx, "task-panel".into());
-        assert!(inside(panel, window_bounds()), "the panel: {panel:?}");
-        let columns = bounds(cx, "factory-columns".into());
-        let card = bounds(cx, format!("factory-card-{open}"));
-        assert!(
-            inside(card, columns),
-            "{open}'s card in view beside its panel: {card:?} in {columns:?}"
-        );
-        whole_columns(cx, open);
-        let board = bounds(cx, "factory-board".into());
-        for control in ["factory-clear", "factory-new-task"] {
-            let at = bounds(cx, control.into());
-            assert!(
-                inside(at, board) && inside(at, window_bounds()),
-                "{control} with {open} open: {at:?}"
-            );
-        }
-    }
-}
-
-/// Beside the open panel the board shows whole columns: each is in view
-/// or out of it, none half under the panel or the sidebar.
-fn whole_columns(cx: &mut gpui::VisualTestContext, open: &str) {
+    view.update(cx, |view, cx| view.open_task(view.cockpit.read(cx).first_machine(), "t-6", cx));
+    tick(cx);
+    tick(cx);
+    let panel = bounds(cx, "task-panel".into());
+    assert!(inside(panel, window_bounds()), "the panel: {panel:?}");
     let columns = bounds(cx, "factory-columns".into());
-    let mut in_view = 0;
-    for key in [
-        "queued",
-        "working",
-        "needs_human",
-        "approval",
-        "stopped",
-        "completed",
-    ] {
-        let column = bounds(cx, format!("factory-column-{key}"));
-        let out =
-            column.right() <= columns.left() + px(1.) || column.left() >= columns.right() - px(1.);
-        assert!(
-            inside(column, columns) || out,
-            "{key} is whole or gone with {open} open: {column:?} in {columns:?}"
-        );
-        in_view += usize::from(!out);
-    }
-    assert!(in_view >= 2, "{in_view} columns in view with {open} open");
-}
-
-/// V1: a Task that moves column while its panel is open is followed there:
-/// one that completes while open shows in Completed beside its panel.
-#[gpui::test]
-fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
-    let (mut core, _fake) = cockpit("fit-moves", 1);
-    let project = core.project_of(core.threads()[0]).unwrap();
-    core.fixture_factory(every_column(project.project()));
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    wide(cx);
-    view.update(cx, |view, cx| {
-        view.open_factory(project, cx);
-        view.open_task(view.cockpit.read(cx).first_machine(), "t-3", cx);
-    });
-    tick(cx);
-    tick(cx);
-    let mut board = every_column(project.project());
-    board.tasks[2].status = Status::Completed;
-    view.update(cx, |view, cx| {
-        view.cockpit.update(cx, |cockpit, _| cockpit.fixture_factory(board));
-        cx.notify();
-    });
-    tick(cx);
-    tick(cx);
-    let columns = bounds(cx, "factory-columns".into());
-    let card = bounds(cx, "factory-card-t-3".into());
-    let completed = bounds(cx, "factory-column-completed".into());
-    assert!(
-        completed.left() <= card.left() && card.right() <= completed.right(),
-        "t-3 moved to Completed: {card:?} in {completed:?}"
-    );
+    let card = bounds(cx, "factory-card-t-6".into());
     assert!(
         inside(card, columns),
-        "t-3's card followed beside its panel: {card:?} in {columns:?}"
+        "t-6's card in view beside its panel: {card:?} in {columns:?}"
     );
-    whole_columns(cx, "t-3");
+    let board = bounds(cx, "factory-board".into());
+    for control in ["factory-clear", "factory-new-task"] {
+        let at = bounds(cx, control.into());
+        assert!(
+            inside(at, board) && inside(at, window_bounds()),
+            "{control} with t-6 open: {at:?}"
+        );
+    }
 }
 
 /// V3: an empty Project is not in the Factory menu, but its Factory is one
@@ -321,7 +257,7 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     tick(cx);
     let opening = view.read_with(cx, |view, cx| {
         view.factory()
-            .map(|view| view.read(cx).coordinator.read(cx).field.read(cx).text().to_string())
+            .map(|view| view.read(cx).coordinator().read(cx).field().read(cx).text().to_string())
     });
     assert_eq!(opening.as_deref(), Some("plan the week"));
 }
@@ -409,7 +345,7 @@ fn the_coordinators_pane_draws_without_a_click(cx: &mut TestAppContext) {
         view.open_factory(project, cx);
         // The surface already shows when the Coordinator's Pane arrives:
         // nothing moved the roster to it.
-        view.update_factory(cx, |factory, _| factory.surface = Surface::Coordinator);
+        view.update_factory(cx, |factory, _| factory.set_surface(Surface::Coordinator));
         cx.notify();
     });
     tick(cx);
@@ -636,7 +572,7 @@ fn focusing_a_worker_by_id_brings_its_panel_forward_from_workflows(cx: &mut Test
     assert!(shows(cx, "task-worker"));
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.factory().map(|view| view.read(cx).surface),
+            view.factory().map(|view| view.read(cx).surface()),
             Some(Surface::Board)
         );
     });

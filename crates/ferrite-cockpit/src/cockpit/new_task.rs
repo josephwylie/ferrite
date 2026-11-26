@@ -6,8 +6,6 @@
 //! `NewTaskEvent`. Opening it, keeping what was typed on its Factory once
 //! it closes, and starting the Task, a Server call, stay the root's.
 
-use super::factory::TaskTab;
-use super::workflows::Surface;
 use super::*;
 use ferrite_core::factory_board::WorkflowId;
 use ferrite_core::protocol::{Done, TaskAction};
@@ -61,7 +59,7 @@ impl CockpitView {
             return;
         };
         let kept = self
-            .update_factory(cx, |view, _| view.kept.take())
+            .update_factory(cx, |view, _| view.take_kept())
             .flatten()
             .unwrap_or_else(KeptNewTask::new);
         let inputs = Source::of(&cx.entity(), |root: &Self, (project, workflow): &NewTaskQuery, cx| {
@@ -87,7 +85,7 @@ impl CockpitView {
             (sheet.project(), sheet.kept(cx))
         };
         if self.factory_project() == Some(project) {
-            self.update_factory(cx, |view, _| view.kept = Some(kept));
+            self.update_factory(cx, |view, _| view.keep(kept));
         }
     }
 
@@ -121,13 +119,7 @@ impl CockpitView {
             {
                 Ok(Some(Done::Task { task })) => {
                     self.hide_sheet(cx);
-                    self.update_factory(cx, |view, _| {
-                        view.kept = None;
-                        view.surface = Surface::Board;
-                        view.open = Some(task);
-                        view.tab = TaskTab::Overview;
-                        view.note = None;
-                    });
+                    self.update_factory(cx, |view, _| view.open_started(task));
                     None
                 }
                 Ok(_) => Some(SharedString::from("The Server did not start the task.")),

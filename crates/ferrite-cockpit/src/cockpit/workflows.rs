@@ -13,10 +13,10 @@ use ferrite_core::factory_board::{
     WorkflowId,
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
+use ferrite_factory::board::Surface;
 
 pub(crate) use ferrite_factory::field::Field;
 pub(crate) use ferrite_factory::picker::{Pick, Trigger};
-pub(crate) use ferrite_factory::workflows::pickers::{model_choices, model_chosen, model_name};
 pub(crate) use ferrite_factory::workflows::{
     Inspected, StepDrag, WorkflowsEvent, WorkflowsInputs, WorkflowsView,
 };
@@ -24,23 +24,13 @@ mod editor;
 mod pickers;
 mod save;
 mod skills;
-pub(crate) use skills::Skills;
-
-/// What the Factory view shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Surface {
-    /// The Coordinator's conversation and proposals (#224).
-    Coordinator,
-    Board,
-    Workflows,
-}
 
 impl CockpitView {
     /// Switch the Factory view between its Board and its Workflows.
     pub(crate) fn factory_surface(&mut self, surface: Surface, cx: &mut Context<Self>) {
         let shown = self.update_factory(cx, |view, cx| {
-            view.surface = surface;
-            view.editor.update(cx, |editor, _| editor.set_focused(None));
+            view.set_surface(surface);
+            view.editor().update(cx, |editor, _| editor.set_focused(None));
         });
         if shown.is_none() {
             return;
@@ -60,12 +50,12 @@ impl CockpitView {
 
     /// The Workflows editor, while the Factory shows.
     fn factory_editor(&self, cx: &gpui::App) -> Option<Entity<WorkflowsView>> {
-        self.factory().map(|view| view.read(cx).editor.clone())
+        self.factory().map(|view| view.read(cx).editor().clone())
     }
 
     /// The Workflow the surface shows: the one chosen, else the first.
     pub(crate) fn shown_workflow<'a>(&self, cx: &'a gpui::App) -> Option<&'a Workflow> {
-        self.chosen_workflow(self.factory()?.read(cx).editor.read(cx).selected().map(String::as_str), cx)
+        self.chosen_workflow(self.factory()?.read(cx).editor().read(cx).selected().map(String::as_str), cx)
     }
 
     /// The Workflow shown with `chosen` chosen: it, else the Project's
@@ -83,7 +73,7 @@ impl CockpitView {
     /// The Step the inspector shows: the one chosen, else the first.
     pub(crate) fn shown_step<'a>(&self, cx: &'a gpui::App) -> Option<&'a Step> {
         let workflow = self.shown_workflow(cx)?;
-        self.factory()?.read(cx).editor.read(cx).shown_step(&workflow.draft)
+        self.factory()?.read(cx).editor().read(cx).shown_step(&workflow.draft)
     }
 
     /// The shown Workflow's Step `step`, as the draft holds it now.
@@ -101,12 +91,12 @@ impl CockpitView {
         let machine = self.factory_machine()?;
         let done = match self.cockpit.update(cx, |cockpit, _| cockpit.workflow(machine, action)) {
             Ok(done) => {
-                self.update_factory(cx, |view, _| view.note = None);
+                self.update_factory(cx, |view, _| view.set_note(None));
                 done
             }
             Err(error) => {
                 self.update_factory(cx, |view, _| {
-                    view.note = Some(SharedString::from(error.to_string()))
+                    view.set_note(Some(SharedString::from(error.to_string())))
                 });
                 None
             }
@@ -135,8 +125,8 @@ impl CockpitView {
 
     pub(crate) fn select_workflow(&mut self, workflow: WorkflowId, cx: &mut Context<Self>) {
         self.update_factory(cx, |view, cx| {
-            view.surface = Surface::Workflows;
-            view.editor
+            view.set_surface(Surface::Workflows);
+            view.editor()
                 .update(cx, |editor, _| editor.select_workflow(workflow));
         });
         self.ensure_fields(cx);
@@ -240,8 +230,8 @@ impl CockpitView {
         let Some(editor) = self
             .factory()
             .map(|view| view.read(cx))
-            .filter(|view| view.surface == Surface::Workflows)
-            .map(|view| view.editor.clone())
+            .filter(|view| view.surface() == Surface::Workflows)
+            .map(|view| view.editor().clone())
         else {
             return;
         };
@@ -334,7 +324,7 @@ impl CockpitView {
     pub(crate) fn field_text(&self, field: &Field, cx: &gpui::App) -> Option<String> {
         self.factory()?
             .read(cx)
-            .editor
+            .editor()
             .read(cx)
             .field(field)
             .map(|composer| composer.read(cx).text().to_string())
@@ -344,10 +334,10 @@ impl CockpitView {
     /// chosen, else the outline.
     pub(super) fn workflows_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory()?.read(cx);
-        if view.surface != Surface::Workflows {
+        if view.surface() != Surface::Workflows {
             return None;
         }
-        let editor = view.editor.read(cx);
+        let editor = view.editor().read(cx);
         Some(
             editor
                 .focus(cx)
