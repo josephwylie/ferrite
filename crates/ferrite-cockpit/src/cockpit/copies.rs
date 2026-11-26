@@ -937,6 +937,9 @@ impl Copies {
             self.entries.retain(|(at, _)| at != key);
             return false;
         }
+        // Added: its destination is no unfinished copy now.
+        let target = &entry.order.target;
+        entry.unfinished.retain(|path| path != target);
         entry.phase = Phase::Done(Summary {
             bytes,
             took: now.saturating_duration_since(entry.began),

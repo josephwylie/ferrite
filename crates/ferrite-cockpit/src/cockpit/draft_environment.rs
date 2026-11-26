@@ -579,7 +579,7 @@ impl CockpitView {
             .cockpit
             .read(cx)
             .project(project)
-            .map_or(dest, |placed| placed.root.clone());
+            .map_or_else(|| dest.clone(), |placed| placed.root.clone());
         let placed = Placement {
             local_root: placing.root.clone(),
             remote_root,
@@ -594,6 +594,10 @@ impl CockpitView {
             self.copies.update(cx, |copies, cx| copies.unadded(key, reason, false, cx));
             self.tell_copy(key, cx);
             return;
+        }
+        // Kept unfinished until now, so a copy never added is resumed.
+        if let Err(error) = placement::added_there(&placing.kept, &placing.root, &dest) {
+            ferrite_core::log!("the copy of {} is still kept as unfinished: {error}", placing.root.display());
         }
         let moves = order.waits
             && self

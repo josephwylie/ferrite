@@ -333,10 +333,14 @@ Windows window.
 - **An unfinished copy can be resumed.** Before its first byte a copy is
   kept on this computer as **unfinished**, at
   `machine::dir(..)/unfinished.json` beside the Placements, by P's root
-  and the destination alone. It is cleared once the copy is in, or once
-  it stops with nothing landed; `placement::copy` alone writes and clears
-  it, one run at a time for a destination, so a run cancelled before
-  anything landed never clears what the next run wrote. A copy cancelled, cut off, or stopped with the app is resumed by the
+  and the destination alone. It is cleared once the copy is added there
+  (`placement::added_there`, by the window once its Placement is kept),
+  or once it stops with nothing landed (`placement::copy`, one run at a
+  time for a destination, so a run cancelled before anything landed
+  never clears what the next run wrote). A copy whose files all landed
+  but that was never added (its Machine went, the registration failed,
+  or the window closed first) is still unfinished, so its Resume finds
+  it and adds it. A copy cancelled, cut off, or stopped with the app is resumed by the
   next copy of P to that destination, which reads what is done off the
   destination rather than a list: a file there as the copy sends it is
   done, one not there is sent, and one there that differs is someone

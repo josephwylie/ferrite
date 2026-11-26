@@ -604,6 +604,8 @@ fn a_copy_cancelled_as_its_last_replies_come_stays_unfinished() {
 
     let (resumed, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
     assert_eq!((resumed.written, changed), (0, Vec::<String>::new()), "nothing left to send");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
+    added_there(&kept, &source, &dest).unwrap();
     assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
 }
 
@@ -677,7 +679,7 @@ fn a_resume_sends_only_what_is_not_there_and_leaves_what_someone_put_there() {
             assert_eq!(fs::read_to_string(dest.join(&path)).unwrap(), at.to_string(), "{path}");
         }
     }
-    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
 }
 
 /// A resume's progress is of the whole copy: what the stopped copy landed
@@ -762,9 +764,8 @@ fn a_copy_stopped_at_a_link_is_finished_by_its_resume() {
     assert_eq!((resumed.linked, resumed.unmade.len()), (1, 0), "{resumed:?}");
     assert_eq!(changed, Vec::<String>::new());
     assert_eq!(fs::read(dest.join("node_modules/pkg/index.js")).unwrap(), b"module.exports = 1;\n");
-    assert_eq!(unfinished(&kept, &source), Vec::<PathBuf>::new(), "finished");
+    assert_eq!(unfinished(&kept, &source), [dest.clone()], "unfinished until it is added");
 
-    begun(&kept, Unfinished { local_root: source.clone(), remote_root: dest.clone() }).unwrap();
     fs::remove_file(dest.join("README.md")).unwrap();
     let (again, changed) = sent(copy(&job, &mut Local::new(), &mut |_| {}, &Cancellation::default()).unwrap());
     assert_eq!(changed, Vec::<String>::new(), "the link there is this copy's");

@@ -1384,6 +1384,57 @@ fn a_copy_that_landed_but_was_not_added_resumes_by_adding_it(cx: &mut TestAppCon
     drawn(cx, "placement-where");
 }
 
+/// A copy whose files all landed and that box could not add stays
+/// unfinished on this computer until it is added, not only in the window:
+/// once the window lets go of it, its card closed and its draft sent here,
+/// the card opened again finds it there and its Resume adds it.
+#[gpui::test]
+fn a_copy_not_added_stays_unfinished_until_it_is(cx: &mut TestAppContext) {
+    let base = resolved_dir("env-unadded-kept");
+    let projects = base.join("projects");
+    let (mut core, _fake, machines, _agents) = two_machines_keeping_projects_in("env-unadded-kept", &projects);
+    let on_box = machines.held(1).unwrap();
+    let source = project_folder(&base.join("here/app"), None);
+    let mine = registered_here(&mut core, &source);
+    let (view, cx) = window_of(cx, core, machines, Preferences::ephemeral());
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft_in_project(mine, cx));
+    tick(cx);
+    let draft = focused_draft(&view, cx);
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-ignored:.env");
+    let dest = projects.join("app");
+    // box cannot keep what it registers: its registry cannot be written.
+    let jammed = settings_dir("env-unadded-kept").join("box").join("registry.json.tmp");
+    std::fs::create_dir_all(&jammed).unwrap();
+    press(cx, "placement-copy");
+    drawn(cx, "placement-failed");
+    assert!(dest.join("main.rs").is_file(), "all of it landed");
+    assert_eq!(
+        ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
+        [dest.clone()],
+        "unfinished until it is added"
+    );
+
+    press(cx, "placement-close");
+    pick_on(&view, ENVIRONMENT, "Local", cx);
+    let kept = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, cx| view.copies.read(cx).iter().count());
+    assert_eq!(kept(cx), 0, "the window let go of it");
+    std::fs::remove_dir_all(&jammed).unwrap();
+    pick_on(&view, ENVIRONMENT, "box", cx);
+    drawn(cx, "placement-unfinished");
+    until(cx, |cx| destination(&view, cx).replace('\\', "/") == shown(&dest));
+    drawn(cx, "placement-ignored:.env");
+    press(cx, "placement-resume");
+    until(cx, |cx| draft_project(&view, draft, cx).machine() == on_box);
+    assert_eq!(roots_on(&view, on_box, cx), [dest.clone()]);
+    assert_eq!(
+        ferrite_core::placement::unfinished(&box_dir(&view, cx), &source),
+        Vec::<PathBuf>::new(),
+        "added, it is no longer unfinished"
+    );
+}
+
 /// A copy that ends while the window is in the background tells the
 /// system, its card up or not; the notification is taken back once the
 /// operator, back in the window, has the card show how it ended.

@@ -82,6 +82,15 @@ fn begun(dir: &Path, copy: Unfinished) -> io::Result<()> {
     write_list(&dir.join(UNFINISHED), &known)
 }
 
+/// The copy of the Project at `local_root` to `remote_root` is added
+/// there, a Project of the Machine whose files are in `dir`, and its
+/// Placement kept: it is unfinished no longer. Until then a copy whose
+/// files all landed is still unfinished, so one the window never added
+/// (its Machine went first, or the window did) is found by its Resume.
+pub fn added_there(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
+    finished(dir, local_root, remote_root)
+}
+
 fn finished(dir: &Path, local_root: &Path, remote_root: &Path) -> io::Result<()> {
     let mut known: Vec<Unfinished> = read_list(&dir.join(UNFINISHED));
     let before = known.len();
@@ -701,12 +710,12 @@ const COUNTED: usize = 250;
 /// there: a file there as the copy sends it is done, and one that is not
 /// is someone else's, left and listed as changed. Neither removes
 /// anything. What could not be read as it was listed is sent once more,
-/// and what still could not is in the answer's problems. Once done, or
-/// stopped before anything landed, the copy is no longer kept as
-/// unfinished. It is cancelled or done, never both: a cancel heard after
-/// the last request, while its replies come, stops it all the same. A run
-/// waits for the one before it to the same destination to end
-/// ([`Going`]).
+/// and what still could not is in the answer's problems. Stopped before
+/// anything landed, the copy is no longer kept as unfinished; done, it is
+/// until it is added there ([`added_there`]). It is cancelled or done,
+/// never both: a cancel heard after the last request, while its replies
+/// come, stops it all the same. A run waits for the one before it to the
+/// same destination to end ([`Going`]).
 pub fn copy(
     copy: &CopyJob,
     exchange: &mut dyn Exchange,
@@ -740,9 +749,6 @@ pub fn copy(
     }
     if let Err(error) = cancel.end() {
         return Err(ended_short(Stopped { error, sent }));
-    }
-    if let Err(error) = finished(copy.kept, copy.source, copy.dest) {
-        return Err(Stopped { error, sent });
     }
     Ok(Copied::Sent { sent, changed })
 }
