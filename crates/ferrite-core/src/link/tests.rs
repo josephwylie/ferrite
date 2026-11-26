@@ -95,6 +95,48 @@ fn a_connection_is_accepted_from_this_user() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A Server that takes the connection and its hello and never welcomes it
+/// does not keep a connection given patience waiting past it: the attach
+/// ends, timed out.
+#[test]
+fn an_attach_given_patience_ends_when_the_server_never_welcomes() {
+    let dir = scratch("never-welcomed");
+    let path = address(&dir);
+    let listener = listen(&path).unwrap();
+    let (taken, hello_read) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let stream = listener.accept().unwrap();
+        let mut input = Lines::new(stream.try_clone().unwrap());
+        let hello = input.next_message::<ClientMessage>().unwrap();
+        assert!(matches!(hello, Some(ClientMessage::Hello { .. })));
+        let _ = taken.send(());
+        // Held open, never answered, until the window's end goes.
+        while let Ok(Some(_)) = input.next_message::<ClientMessage>() {}
+        drop(stream);
+    });
+    let hello = ClientMessage::Hello {
+        generation: 1,
+        client: Peer {
+            name: "never-welcomed".into(),
+            version: "test".into(),
+        },
+        capabilities: vec![],
+    };
+    let (ended, attach) = mpsc::channel();
+    std::thread::spawn(move || {
+        let attached = Client::attach_within(&path, hello, Duration::from_millis(200));
+        let _ = ended.send(attached.map(drop));
+    });
+    hello_read.recv_timeout(Duration::from_secs(10)).expect("the Server took the hello");
+    let attached = attach
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the attach is still waiting for a welcome");
+    let error = attached.expect_err("never welcomed");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
+    server.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn browser_annotation_upload_does_not_wait_for_socket_and_keeps_following_messages_ordered() {
     use crate::browser::{Document, Lease, Owner, TabId};

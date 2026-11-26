@@ -223,8 +223,9 @@ impl Refusal {
 }
 
 /// How long a Server is given to answer a chunk or any one entry's op,
-/// once what was asked before it is answered.
-const PATIENCE: Duration = Duration::from_secs(30);
+/// once what was asked before it is answered, and to welcome a tree's own
+/// connection to it.
+pub const PATIENCE: Duration = Duration::from_secs(30);
 /// A scan hashes every file it has not seen before.
 const SCAN_PATIENCE: Duration = Duration::from_secs(600);
 /// How far a send asks ahead of the replies: at most this many requests,

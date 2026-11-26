@@ -8,6 +8,7 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -113,6 +114,60 @@ pub trait TryClone: Sized {
 
 // --------------------------------------------------------------- client
 
+/// An attach's handshake given patience: past it, before the handshake has
+/// settled, the stream is shut, so a read waiting on a Server that never
+/// welcomes ends.
+struct Deadline {
+    handshake: Arc<Mutex<Handshake>>,
+    /// Dropped once settled, which ends the watch at once.
+    _settled: mpsc::Sender<()>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Handshake {
+    Waiting,
+    Settled,
+    Passed,
+}
+
+impl Deadline {
+    fn watch(stream: &Stream, patience: Duration) -> io::Result<Self> {
+        let shut = stream.try_clone()?;
+        let handshake = Arc::new(Mutex::new(Handshake::Waiting));
+        let (settled, settling) = mpsc::channel::<()>();
+        let watched = Arc::clone(&handshake);
+        std::thread::Builder::new()
+            .name("ferrite-handshake".into())
+            .spawn(move || {
+                if let Err(RecvTimeoutError::Timeout) = settling.recv_timeout(patience) {
+                    let mut handshake = watched.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if *handshake == Handshake::Waiting {
+                        *handshake = Handshake::Passed;
+                        let _ = shut.shutdown();
+                    }
+                }
+            })?;
+        Ok(Self {
+            handshake,
+            _settled: settled,
+        })
+    }
+
+    /// The handshake ended, however it went: timed out once the deadline
+    /// came first, the stream shut by then.
+    fn settle(self) -> io::Result<()> {
+        let mut handshake = self.handshake.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *handshake == Handshake::Passed {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "The server did not welcome the connection in time",
+            ));
+        }
+        *handshake = Handshake::Settled;
+        Ok(())
+    }
+}
+
 /// A window's end of the link: what it sends goes out at once; what the
 /// Server says arrives on `messages`, read by its own thread.
 pub struct Client {
@@ -131,9 +186,20 @@ pub struct Attached {
 }
 
 impl Client {
+    /// [`Client::attach`], the Server given `patience` to welcome it and
+    /// send its snapshot: for a connection of its own that must end when a
+    /// Server takes it and never answers.
+    pub fn attach_within(address: &Path, hello: ClientMessage, patience: Duration) -> io::Result<Attached> {
+        Self::attached(address, hello, Some(patience))
+    }
+
     /// Connect, say hello, and read the welcome and snapshot. A refused
     /// welcome is an error carrying the Server's reason.
     pub fn attach(address: &Path, hello: ClientMessage) -> io::Result<Attached> {
+        Self::attached(address, hello, None)
+    }
+
+    fn attached(address: &Path, hello: ClientMessage, patience: Option<Duration>) -> io::Result<Attached> {
         let wall_ms = || crate::clock::now().timestamp_millis();
         // Before connecting: a Server that refuses the generation closes
         // as soon as it has welcomed, so the hello follows the connect at once.
@@ -141,31 +207,39 @@ impl Client {
         let mut stream = connect(address)?;
         send(&mut stream, &hello)?;
         let mut lines = Lines::new(stream.try_clone()?);
-        let welcome: ServerMessage = lines
-            .next_message()?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "no welcome"))?;
-        let received_ms = wall_ms();
-        let server_ms = match &welcome {
-            ServerMessage::Welcome {
-                error: Some(error), ..
-            } => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    error.message.clone(),
-                ))
-            }
-            ServerMessage::Welcome { now_ms, .. } => *now_ms,
-            _ => None,
-        };
-        let snapshot = match lines.next_message()? {
-            Some(ServerMessage::Snapshot(snapshot)) => snapshot,
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "the server sent no snapshot",
-                ))
-            }
-        };
+        let deadline = patience.map(|patience| Deadline::watch(&stream, patience)).transpose()?;
+        let handshake = (|| -> io::Result<_> {
+            let welcome: ServerMessage = lines
+                .next_message()?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "no welcome"))?;
+            let received_ms = wall_ms();
+            let server_ms = match &welcome {
+                ServerMessage::Welcome {
+                    error: Some(error), ..
+                } => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        error.message.clone(),
+                    ))
+                }
+                ServerMessage::Welcome { now_ms, .. } => *now_ms,
+                _ => None,
+            };
+            let snapshot = match lines.next_message()? {
+                Some(ServerMessage::Snapshot(snapshot)) => snapshot,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the server sent no snapshot",
+                    ))
+                }
+            };
+            Ok((welcome, received_ms, server_ms, snapshot))
+        })();
+        if let Some(deadline) = deadline {
+            deadline.settle()?;
+        }
+        let (welcome, received_ms, server_ms, snapshot) = handshake?;
         let (deliver, messages) = crate::doorbell::channel();
         std::thread::Builder::new()
             .name("ferrite-server-in".into())

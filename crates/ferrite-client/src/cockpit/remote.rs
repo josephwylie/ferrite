@@ -245,7 +245,7 @@ impl Remote {
     /// Attach now, waiting for it: when a Server answers or can be
     /// started. Otherwise the window stays detached and keeps trying.
     pub(crate) fn attach_now(&mut self) -> Option<Arrival> {
-        let attached = attach_to(&self.attach.store, &self.attach.server, hello(&self.attach));
+        let attached = attach_to(&self.attach.store, &self.attach.server, hello(&self.attach), None);
         self.attached(attached)
     }
 
@@ -345,7 +345,12 @@ impl Remote {
     /// function runs, for a transfer that must neither wait behind the
     /// window's acts nor hold them up. Its endpoint goes with it: a
     /// machine's bridge carries it.
-    fn side_connection(&self) -> io::Result<impl FnOnce() -> io::Result<(link::Attached, Endpoint)> + Send + 'static> {
+    /// A connection of its own to the Server, `patience` how long the
+    /// Server is given to welcome it, if any.
+    fn side_connection(
+        &self,
+        patience: Option<Duration>,
+    ) -> io::Result<impl FnOnce() -> io::Result<(link::Attached, Endpoint)> + Send + 'static> {
         if self.attachment.is_none() {
             return Err(io::Error::new(io::ErrorKind::NotConnected, &*self.detached));
         }
@@ -356,12 +361,12 @@ impl Remote {
             client: self.attach.client.clone(),
             capabilities: Vec::new(),
         };
-        Ok(move || Ok((attach_to(&store, &endpoint, hello)?, endpoint)))
+        Ok(move || Ok((attach_to(&store, &endpoint, hello, patience)?, endpoint)))
     }
 
     fn attachment_connection(&self) -> io::Result<impl FnOnce() -> io::Result<ferrite_core::attachment_transfer::Exchange> + Send + 'static> {
         let expected_boot = self.attachment.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, &*self.detached))?.boot_id.clone();
-        let connect = self.side_connection()?;
+        let connect = self.side_connection(None)?;
         Ok(move || {
             let (attached, endpoint) = connect()?;
             if attached.snapshot.boot_id != expected_boot {
@@ -380,8 +385,10 @@ impl Remote {
         })
     }
 
+    /// A tree's own connection: a Server that takes it and never welcomes
+    /// it is given `tree::PATIENCE`, so a copy cancelled meanwhile ends.
     pub(crate) fn tree(&self) -> io::Result<ferrite_core::tree::Connect> {
-        let connect = self.side_connection()?;
+        let connect = self.side_connection(Some(ferrite_core::tree::PATIENCE))?;
         Ok(Box::new(move || {
             let (attached, endpoint) = connect()?;
             Ok(Box::new(Routed {
@@ -971,7 +978,7 @@ impl Link for Remote {
             let started = std::thread::Builder::new()
                 .name("ferrite-attach".into())
                 .spawn(move || {
-                    let _ = done.send(attach_to(&store, &server, hello));
+                    let _ = done.send(attach_to(&store, &server, hello, None));
                 });
             if started.is_ok() {
                 self.attaching = Some(attaching);
@@ -1526,18 +1533,23 @@ impl ferrite_core::tree::Exchange for Routed {
 }
 
 /// Attach to the Server: this computer's, started first when none runs
-/// for `store`, or a machine's through its bridge.
+/// for `store`, or a machine's through its bridge. `patience`: how long
+/// the Server is given to welcome it, if any.
 fn attach_to(
     store: &std::path::Path,
     server: &Endpoint,
     hello: ClientMessage,
+    patience: Option<Duration>,
 ) -> io::Result<link::Attached> {
     match server {
         Endpoint::Local { executable } => {
             ferrite_core::server::agent::ensure_running(store, executable)?;
-            link::Client::attach(&link::address(store), hello)
+            match patience {
+                Some(patience) => link::Client::attach_within(&link::address(store), hello, patience),
+                None => link::Client::attach(&link::address(store), hello),
+            }
         }
-        Endpoint::Machine(bridge) => bridge.attach(hello),
+        Endpoint::Machine(bridge) => bridge.attach_within(hello, patience),
     }
 }
 

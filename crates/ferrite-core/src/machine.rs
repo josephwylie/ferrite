@@ -444,9 +444,19 @@ impl Bridge {
     /// Attach to the machine's Server: the window's hello through a fresh
     /// Tunnel. An error carries the [`Failure`] when the Tunnel said why.
     pub fn attach(&self, hello: ClientMessage) -> io::Result<link::Attached> {
+        self.attach_within(hello, None)
+    }
+
+    /// [`Bridge::attach`], the Server given `patience` to welcome it, if
+    /// any ([`link::Client::attach_within`]).
+    pub fn attach_within(&self, hello: ClientMessage, patience: Option<Duration>) -> io::Result<link::Attached> {
         self.listen()?;
         *lock(&self.failure) = None;
-        link::Client::attach(&self.socket, hello).map_err(|error| {
+        let attached = match patience {
+            Some(patience) => link::Client::attach_within(&self.socket, hello, patience),
+            None => link::Client::attach(&self.socket, hello),
+        };
+        attached.map_err(|error| {
             match lock(&self.failure).take() {
                 Some(failure) => io::Error::other(failure),
                 None => error,
