@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ferrite · Synara cleanliness spike</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-elev: #111111;
+    --bg-soft: #161616;
+    --bg-sel: #1c1c1c;
+    --line: rgba(255,255,255,.06);
+    --line-strong: rgba(255,255,255,.09);
+    --text: #ececec;
+    --text-2: #a3a3a3;
+    --text-3: #6f6f6f;
+    --ok: #6fbf8a;
+    --warn: #d4a85a;
+    --bad: #e07870;
+    --blue: #6ea8ff;
+    --r: 8px;
+    --font: Geist, ui-sans-serif, system-ui, sans-serif;
+    --mono: "Geist Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #000; color: var(--text); font: 13px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; background: transparent; border: 0; padding: 0; }
+  button { cursor: pointer; }
+  textarea { resize: none; outline: none; }
+  a { color: inherit; text-decoration: none; }
+
+  .shell {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+
+  /* Variant switcher */
+  .switcher {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: #050505;
+    z-index: 5;
+  }
+  .switcher .label { color: var(--text-3); font-size: 12px; margin-right: 4px; }
+  .chip {
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 999px;
+    color: var(--text-2);
+    border: 1px solid var(--line-strong);
+  }
+  .chip[aria-pressed="true"] {
+    color: var(--text);
+    background: var(--bg-sel);
+    border-color: rgba(255,255,255,.14);
+  }
+  .note { margin-left: auto; color: var(--text-3); font-size: 12px; }
+
+  .app {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr) 360px;
+  }
+  .app.no-dock { grid-template-columns: 248px minmax(0, 1fr); }
+
+  /* Shared chrome */
+  .traffic {
+    display: flex; gap: 7px; align-items: center; height: 40px; padding: 0 14px;
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; }
+  .dot.y { background: #febc2e; }
+  .dot.g { background: #28c840; }
+
+  .side {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--line);
+    min-height: 0;
+  }
+  .side-head {
+    display: flex; align-items: center; gap: 8px;
+    height: 44px; padding: 0 12px 0 14px;
+  }
+  .brand { font-weight: 600; letter-spacing: -0.02em; }
+  .icon-btn {
+    width: 28px; height: 28px; display: grid; place-items: center;
+    border-radius: 7px; color: var(--text-3);
+  }
+  .icon-btn:hover { background: var(--bg-soft); color: var(--text-2); }
+  .new-thread {
+    margin: 0 10px 10px;
+    height: 32px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    border-radius: 8px;
+    background: var(--bg-soft);
+    color: var(--text);
+    font-weight: 500;
+  }
+  .new-thread:hover { background: var(--bg-sel); }
+  .nav-block { padding: 0 8px 8px; }
+  .nav-row {
+    height: 30px; display: flex; align-items: center; gap: 10px;
+    padding: 0 10px; border-radius: 7px; color: var(--text-2);
+  }
+  .nav-row:hover { background: rgba(255,255,255,.03); }
+  .nav-row .kbd { margin-left: auto; color: var(--text-3); font-size: 11px; }
+  .badge {
+    margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px;
+    border-radius: 9px; background: rgba(212,168,90,.16); color: var(--warn);
+    font-size: 11px; font-weight: 600; line-height: 18px; text-align: center;
+  }
+
+  .section-label {
+    display: flex; align-items: center;
+    height: 28px; padding: 0 18px; color: var(--text-3);
+    font-size: 11px; font-weight: 500; letter-spacing: .02em; text-transform: uppercase;
+  }
+  .threads { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; }
+  .proj {
+    display: flex; align-items: center; gap: 8px;
+    height: 28px; padding: 0 10px; color: var(--text-2); font-weight: 500;
+  }
+  .thread {
+    display: flex; flex-direction: column; justify-content: center;
+    min-height: 44px; padding: 7px 10px 7px 32px; border-radius: 8px;
+    position: relative; color: var(--text-2);
+  }
+  .thread:hover { background: rgba(255,255,255,.03); }
+  .thread[aria-current="page"] {
+    background: var(--bg-sel);
+    color: var(--text);
+  }
+  .thread .mark {
+    position: absolute; left: 12px; top: 12px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-3);
+  }
+  .thread .mark.work { background: var(--ok); box-shadow: 0 0 0 3px rgba(111,191,138,.12); }
+  .thread .mark.need { background: var(--warn); box-shadow: 0 0 0 3px rgba(212,168,90,.12); }
+  .thread .t1 { display: flex; gap: 8px; align-items: baseline; }
+  .thread .t1 span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread .meta { font-size: 12px; color: var(--text-3); }
+  .thread[aria-current="page"] .meta { color: #8a8a8a; }
+  .diff { font-family: var(--mono); font-size: 11px; }
+  .diff .p { color: var(--ok); }
+  .diff .m { color: var(--bad); }
+  .side-foot {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 12px;
+  }
+
+  .main {
+    min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  .tabs {
+    flex: none; height: 40px; display: flex; align-items: center; gap: 2px;
+    padding: 0 8px; border-bottom: 1px solid var(--line);
+  }
+  .tab {
+    height: 28px; padding: 0 10px; border-radius: 7px;
+    display: inline-flex; align-items: center; gap: 7px;
+    color: var(--text-3); font-size: 12.5px;
+  }
+  .tab[aria-current="page"] { background: var(--bg-sel); color: var(--text); }
+  .tab .x { color: var(--text-3); opacity: .7; }
+
+  .feed {
+    flex: 1; min-height: 0; overflow: auto;
+    padding: 20px 28px 110px;
+  }
+  .turn {
+    max-width: 720px; margin: 0 auto 18px;
+  }
+  .user-bubble {
+    background: var(--bg-soft);
+    border-radius: 12px;
+    padding: 10px 14px;
+    color: var(--text);
+    display: flex; gap: 10px; justify-content: space-between;
+  }
+  .user-bubble time { color: var(--text-3); font-size: 12px; white-space: nowrap; }
+  .agent-line {
+    display: grid; grid-template-columns: 16px 1fr auto; gap: 10px;
+    margin-top: 14px; color: var(--text-2);
+  }
+  .agent-line .glyph { color: var(--bad); }
+  .agent-line.ok .glyph { color: var(--ok); }
+  .agent-line time { color: var(--text-3); font-size: 12px; }
+  .quiet { color: var(--text-3); font-size: 12px; margin: 10px 0 4px; }
+  .quiet button { color: var(--text-3); }
+  .quiet button:hover { color: var(--text-2); }
+
+  .review {
+    margin-top: 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(255,255,255,.015);
+  }
+  .review-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--line);
+  }
+  .review-head strong { font-weight: 500; }
+  .file {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; font-family: var(--mono); font-size: 12px; color: var(--text-2);
+  }
+  .file + .file { border-top: 1px solid var(--line); }
+  .file .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .code {
+    margin-top: 12px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  .code .h { padding: 8px 12px; color: var(--text-3); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.02); }
+  .code pre { margin: 0; padding: 10px 12px; white-space: pre-wrap; color: var(--text-2); }
+  .code .add { color: var(--ok); }
+  .code .del { color: var(--bad); }
+
+  .composer-wrap {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 0 20px 16px;
+    background: linear-gradient(to top, var(--bg) 55%, transparent);
+    pointer-events: none;
+  }
+  .composer {
+    pointer-events: auto;
+    max-width: 760px; margin: 0 auto;
+    border: 1px solid var(--line-strong);
+    background: #121212;
+    border-radius: 14px;
+    padding: 10px 12px 8px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  .composer .ask {
+    width: 100%; min-height: 44px; resize: none;
+    color: var(--text); outline: none;
+  }
+  .composer .ask::placeholder { color: var(--text-3); }
+  .composer-bar {
+    display: flex; align-items: center; gap: 8px; margin-top: 6px;
+  }
+  .pill {
+    height: 26px; padding: 0 9px; border-radius: 7px;
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-2); background: rgba(255,255,255,.04);
+    font-size: 12px;
+  }
+  .pill .warn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .send {
+    margin-left: auto; width: 28px; height: 28px; border-radius: 8px;
+    display: grid; place-items: center; background: var(--text); color: #111;
+  }
+
+  .dock {
+    min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    border-left: 1px solid var(--line);
+    background: #070707;
+  }
+  .dock-tabs {
+    height: 40px; display: flex; align-items: center; gap: 2px;
+    padding: 0 8px; border-bottom: 1px solid var(--line);
+  }
+  .term {
+    flex: 1; min-height: 0; overflow: auto;
+    padding: 14px 14px 10px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+    color: #cfcfcf;
+  }
+  .term .orange { color: #f0a46a; }
+  .term .green { color: var(--ok); }
+  .term .dim { color: var(--text-3); }
+  .term-status {
+    flex: none; height: 28px; display: flex; align-items: center; gap: 10px;
+    padding: 0 12px; border-top: 1px solid var(--line);
+    color: var(--text-3); font-size: 11.5px; font-family: var(--mono);
+  }
+
+  /* Variant B: quiet card (Ferrite refresh pushed darker) */
+  [data-v="b"] {
+    --bg: #141414;
+    --bg-elev: #1a1a1a;
+    --bg-soft: #222;
+    --bg-sel: #2a2a2a;
+  }
+  [data-v="b"] .app { background: var(--bg); padding: 0 8px 8px 0; gap: 0; }
+  [data-v="b"] .side { border-right: 0; background: transparent; }
+  [data-v="b"] .main {
+    background: #0e0e0e;
+    border-radius: 10px;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    overflow: hidden;
+  }
+  [data-v="b"] .dock {
+    margin-left: 8px;
+    border-left: 0;
+    border-radius: 10px;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    background: #0e0e0e;
+  }
+  [data-v="b"] .composer-wrap { background: linear-gradient(to top, #0e0e0e 55%, transparent); }
+  [data-v="b"] .composer { background: #161616; border-radius: 10px; box-shadow: none; }
+  [data-v="b"] .user-bubble { background: #1a1a1a; }
+
+  /* Variant C: soft dock, more air, chat-forward */
+  [data-v="c"] {
+    --bg: #080808;
+    --bg-elev: #0f0f0f;
+    --bg-soft: #171717;
+    --bg-sel: #1f1f1f;
+    --line: rgba(255,255,255,.05);
+  }
+  [data-v="c"] .app { grid-template-columns: 268px minmax(0, 1fr) 320px; }
+  [data-v="c"] .feed { padding: 28px 40px 120px; }
+  [data-v="c"] .thread { min-height: 48px; }
+  [data-v="c"] .composer { border-radius: 16px; background: #101010; }
+  [data-v="c"] .review { border-radius: 12px; }
+  [data-v="c"] .agent-body { max-width: 640px; color: #d6d6d6; line-height: 1.55; margin: 8px 0 0 26px; }
+
+  .hide { display: none !important; }
+  svg { flex: none; }
+</style>
+</head>
+<body>
+<div class="shell" data-v="a" id="shell">
+  <div class="switcher">
+    <span class="label">Prototype</span>
+    <button class="chip" data-pick="a" aria-pressed="true">A · Ink void</button>
+    <button class="chip" data-pick="b" aria-pressed="false">B · Quiet card</button>
+    <button class="chip" data-pick="c" aria-pressed="false">C · Soft dock</button>
+    <span class="note">Throwaway · single sidebar · Synara cleanliness on Ferrite</span>
+  </div>
+
+  <div class="app" id="app">
+    <aside class="side" aria-label="Threads">
+      <div class="side-head">
+        <div class="traffic" style="padding:0;height:auto;margin-right:4px">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        </div>
+        <span class="brand">Ferrite</span>
+        <span style="flex:1"></span>
+        <button class="icon-btn" aria-label="Search" title="Search">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        </button>
+      </div>
+      <button class="new-thread">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        New thread
+      </button>
+      <div class="nav-block">
+        <button class="nav-row"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span style="flex:1">Search</span><span class="kbd">⌘K</span></button>
+        <button class="nav-row"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span style="flex:1">Needs you</span><span class="badge">3</span></button>
+      </div>
+      <div class="section-label">Projects</div>
+      <div class="threads">
+        <div class="proj"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" style="color:var(--text-3)"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>ferrite</div>
+        <a class="thread" href="#"><span class="mark"></span><span class="t1"><span>Hedr: Rust agent management</span></span><span class="meta">main</span></a>
+        <a class="thread" href="#" aria-current="page"><span class="mark work"></span><span class="t1"><span>Ferrite idle memory usage</span><span class="diff"><span class="p">+4</span> <span class="m">−1</span></span></span><span class="meta">scheduled-work-crash · 5m 22s</span></a>
+
+        <div class="proj" style="margin-top:10px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" style="color:var(--text-3)"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>agenticos</div>
+        <a class="thread" href="#"><span class="mark"></span><span class="t1"><span>Chess Matches: Principled play</span></span><span class="meta">main</span></a>
+
+        <div class="proj" style="margin-top:10px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" style="color:var(--text-3)"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>production-scheduling</div>
+        <a class="thread" href="#"><span class="mark need"></span><span class="t1"><span>Implement recipes feature</span></span><span class="meta" style="color:var(--warn)">needs you · approval</span></a>
+
+        <div class="proj" style="margin-top:10px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" style="color:var(--text-3)"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>invoicemate</div>
+        <a class="thread" href="#"><span class="mark need"></span><span class="t1"><span>Calling customers to move</span></span><span class="meta" style="color:var(--warn)">needs you · question</span></a>
+      </div>
+      <div class="side-foot">
+        <span style="flex:1">Ferrite 0.5</span>
+        <button class="icon-btn" aria-label="Settings">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <button class="tab" aria-current="page">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="20" height="16" rx="2.5"/><path d="m6 9 3 3-3 3M12 15h5"/></svg>
+          Main
+        </button>
+        <button class="tab"><span style="color:var(--ok);font-family:var(--mono);font-size:11px">⠼</span> Spec review of crash fix <span class="x">×</span></button>
+        <span style="width:1px;height:14px;background:var(--line-strong);margin:0 6px"></span>
+        <button class="tab" style="color:var(--text-3)">23 done ▾</button>
+        <span style="flex:1"></span>
+        <button class="icon-btn" aria-label="Split">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M12 3v18"/></svg>
+        </button>
+      </div>
+
+      <div class="feed">
+        <div class="turn">
+          <div class="user-bubble">
+            <span>Oamy ylou killed it again? it keeps dying</span>
+            <time>12:26 pm</time>
+          </div>
+
+          <div class="agent-line ok"><span class="glyph">●</span><span>I'll dig into the crash path and the idle memory path in parallel.</span><time>12:26 pm</time></div>
+          <div class="quiet"><button>Worked for 25s ▸</button></div>
+
+          <div class="review">
+            <div class="review-head">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              <strong>Edited 4 files</strong>
+              <span class="diff"><span class="p">+372</span> <span class="m">−185</span></span>
+              <span style="flex:1"></span>
+              <span style="color:var(--text-3);font-size:12px">Review</span>
+            </div>
+            <div class="file"><span class="path">crates/ferrite-app/src/runtime/idle.rs</span><span class="diff"><span class="p">+120</span> <span class="m">−40</span></span></div>
+            <div class="file"><span class="path">crates/ferrite-pane/src/layout.rs</span><span class="diff"><span class="p">+88</span> <span class="m">−61</span></span></div>
+            <div class="file"><span class="path">crates/ferrite-theme/src/tokens.rs</span><span class="diff"><span class="p">+94</span> <span class="m">−22</span></span></div>
+            <div class="file"><span class="path">docs/design/ui-refresh/SPEC.md</span><span class="diff"><span class="p">+70</span> <span class="m">−62</span></span></div>
+          </div>
+
+          <div class="agent-body hide" id="agent-extra">
+            The scheduler was retaining pane snapshots after the last keyframe. Dropping them on idle clears the leak without changing the working loop.
+          </div>
+
+          <div class="code">
+            <div class="h">idle.rs</div>
+            <pre><span class="del">- if last_activity.elapsed() > IDLE { retain_snapshots(); }</span>
+<span class="add">+ if last_activity.elapsed() > IDLE { drop_snapshots(); }</span>
+<span class="add">+ metrics::gauge!("ferrite.idle.retained_kb").set(0.0);</span></pre>
+          </div>
+
+          <div class="quiet" style="margin-top:16px">done · 4:54 PM</div>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea class="ask" rows="2" placeholder="Ask anything, @tag files, or / for commands"></textarea>
+          <div class="composer-bar">
+            <button class="icon-btn" aria-label="Attach" style="width:26px;height:26px">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button class="pill"><span class="warn-dot"></span> Full access</button>
+            <button class="pill">Opus 4.6 ▾</button>
+            <button class="pill">High</button>
+            <button class="send" aria-label="Send">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="dock" aria-label="Tools">
+      <div class="dock-tabs">
+        <button class="tab" aria-current="page">Terminal</button>
+        <button class="tab">Changes</button>
+        <button class="tab">Browser</button>
+      </div>
+      <div class="term">
+        <div class="orange">Claude Code</div>
+        <div class="dim" style="margin:8px 0 12px">────────────────</div>
+        <div>❯ cargo test -p ferrite-app idle -- --nocapture</div>
+        <div class="green" style="margin-top:8px">ok</div>
+        <div class="dim">test idle::drops_snapshots ... ok</div>
+        <div class="dim">test idle::metrics_zero ... ok</div>
+        <div style="margin-top:12px">running 2 tests</div>
+        <div class="green">2 passed · 0 failed</div>
+        <div class="dim" style="margin-top:16px">~/src/ferrite on scheduled-work-crash</div>
+      </div>
+      <div class="term-status">
+        <span>sonnet</span>
+        <span>·</span>
+        <span>scheduled-work-crash</span>
+        <span style="color:var(--ok)">#1526</span>
+        <span style="margin-left:auto">auto</span>
+      </div>
+    </aside>
+  </div>
+</div>
+<script>
+  const shell = document.getElementById('shell');
+  const extra = document.getElementById('agent-extra');
+  const chips = [...document.querySelectorAll('.chip[data-pick]')];
+  function pick(v) {
+    shell.dataset.v = v;
+    chips.forEach(c => c.setAttribute('aria-pressed', String(c.dataset.pick === v)));
+    extra.classList.toggle('hide', v !== 'c');
+  }
+  chips.forEach(c => c.addEventListener('click', () => pick(c.dataset.pick)));
+  document.addEventListener('keydown', e => {
+    if (e.target.matches('textarea, input')) return;
+    if (e.key === '1') pick('a');
+    if (e.key === '2') pick('b');
+    if (e.key === '3') pick('c');
+  });
+  const q = new URLSearchParams(location.search).get('v');
+  if (q === 'a' || q === 'b' || q === 'c') pick(q);
+</script>
+</body>
+</html>
