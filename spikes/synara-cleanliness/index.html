@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ferrite · what actually changes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --font: Geist, ui-sans-serif, system-ui, sans-serif;
+    --mono: "Geist Mono", ui-monospace, monospace;
+    --ok: #6fbf8a; --warn: #d4a85a; --bad: #e07870;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #050505; color: #ececec; font: 13px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; background: transparent; border: 0; padding: 0; }
+  button { cursor: pointer; }
+  textarea { resize: none; outline: none; }
+  a { color: inherit; text-decoration: none; }
+
+  .top {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,.08); background: #0a0a0a;
+  }
+  .top h1 { margin: 0; font-size: 13px; font-weight: 600; }
+  .chip {
+    height: 28px; padding: 0 12px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.12); color: #a3a3a3;
+  }
+  .chip[aria-pressed="true"] { background: #1c1c1c; color: #fff; border-color: rgba(255,255,255,.2); }
+  .legend { margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; color: #8a8a8a; font-size: 12px; }
+  .legend b { color: #d4d4d4; font-weight: 500; }
+
+  .stage { height: calc(100vh - 49px); display: grid; grid-template-columns: 1fr 320px; }
+  .canvas { min-width: 0; min-height: 0; overflow: hidden; }
+  .notes {
+    border-left: 1px solid rgba(255,255,255,.08);
+    padding: 16px 16px 24px; overflow: auto; background: #0a0a0a;
+  }
+  .notes h2 { margin: 0 0 8px; font-size: 13px; }
+  .notes p { margin: 0 0 14px; color: #9a9a9a; font-size: 12.5px; }
+  .notes ol { margin: 0; padding-left: 18px; color: #cfcfcf; }
+  .notes li { margin: 0 0 10px; }
+  .notes li span { display: block; color: #7a7a7a; font-size: 12px; margin-top: 2px; }
+  .notes .only-after, .notes .only-before { display: none; }
+  body[data-mode="before"] .notes .only-before { display: block; }
+  body[data-mode="after"] .notes .only-after { display: block; }
+  .delta { color: #6ea8ff; }
+
+  /* Shared app chrome bits */
+  .app { height: 100%; display: flex; flex-direction: column; }
+  .row { flex: 1; min-height: 0; display: flex; }
+  .side { width: 248px; flex: none; display: flex; flex-direction: column; border-right: 1px solid rgba(255,255,255,.07); }
+  .traffic { display: flex; gap: 7px; padding: 14px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+  .nav { padding: 0 10px 8px; }
+  .nav button, .thread {
+    display: flex; width: 100%; align-items: center; gap: 8px;
+    height: 30px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; text-align: left;
+  }
+  .thread { height: auto; min-height: 44px; flex-direction: column; align-items: stretch; justify-content: center; padding: 7px 10px 7px 28px; position: relative; }
+  .thread .m { position: absolute; left: 12px; top: 14px; width: 7px; height: 7px; border-radius: 50%; background: #666; }
+  .thread.on { background: #2a2a2a; color: #f2f2f2; }
+  .thread .t2 { font-size: 12px; color: #8c8c8c; }
+  .proj { padding: 8px 12px 4px; color: #8c8c8c; font-size: 12px; font-weight: 500; }
+  .badge { margin-left: auto; min-width: 18px; height: 18px; border-radius: 9px; background: rgba(212,168,90,.16); color: var(--warn); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; padding: 0 5px; }
+
+  /* ========== BEFORE: Ferrite refresh shape ========== */
+  .before { background: #222; color: #d0d0d0; }
+  .before .side { background: transparent; border-right: 0; padding: 0 8px 8px; }
+  .before .main-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 0 0 8px; }
+  .before .head { height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 8px; }
+  .before .head h2 { margin: 0; font-size: 13.5px; font-weight: 600; color: #f2f2f2; }
+  .before .branch {
+    margin-left: auto; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+    border-radius: 7px; background: #2a2a2a; font-size: 12px;
+  }
+  .before .card {
+    flex: 1; min-height: 0; margin-right: 0; background: #181818; border-radius: 10px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.07); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .before .tabs { height: 38px; display: flex; align-items: center; gap: 2px; padding: 0 6px; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .before .tab { height: 28px; padding: 0 10px; border-radius: 6px; color: #a0a0a0; font-size: 12.5px; }
+  .before .tab.on { background: #262626; color: #f2f2f2; }
+  .before .feed {
+    flex: 1; overflow: auto; padding: 16px 28px;
+    font-family: var(--mono); font-size: 13px; line-height: 21px;
+  }
+  .before .prompt {
+    display: grid; grid-template-columns: 2ch 1fr auto; gap: 0 8px;
+    padding: 8px 12px; margin: 0 -12px 12px; border-radius: 7px; background: #222;
+  }
+  .before .line { display: grid; grid-template-columns: 2ch 1fr auto; gap: 0 8px; margin: 0 0 10px; }
+  .before .tool { color: #8c8c8c; }
+  .before .composer {
+    margin: 0 14px 14px; border-radius: 10px; background: #222;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.08); padding: 0;
+  }
+  .before .queued {
+    display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 14px;
+    border-bottom: 1px solid rgba(255,255,255,.06); color: #8c8c8c; font-size: 12px;
+  }
+  .before .composer input { width: 100%; padding: 14px; outline: none; }
+  .before .composer-bar { display: flex; gap: 6px; align-items: center; padding: 0 8px 10px; }
+  .before .pill { height: 28px; padding: 0 9px; border-radius: 7px; color: #e6c47c; font-size: 12.5px; }
+  .before .right {
+    width: 304px; flex: none; display: flex; flex-direction: column; padding: 0 10px 8px 8px;
+  }
+  .before .right .rtabs { height: 46px; display: flex; align-items: center; gap: 2px; }
+  .before .right .rtab { height: 28px; padding: 0 10px; border-radius: 7px; color: #a0a0a0; }
+  .before .right .rtab.on { background: #2e2e2e; color: #f2f2f2; }
+  .before .pr { flex: 1; overflow: auto; padding: 8px 2px; }
+  .before .pr h3 { margin: 8px 0; font-size: 14px; color: #f2f2f2; }
+  .before .check { display: flex; gap: 8px; padding: 8px 0; color: #d0d0d0; }
+  .before .foot {
+    height: 30px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+    border-top: 1px solid rgba(255,255,255,.05); background: #1e1e1e; color: #8c8c8c; font-size: 12px;
+  }
+  .before .foot .on { background: #2e2e2e; color: #f2f2f2; padding: 2px 8px; border-radius: 5px; }
+
+  /* ========== AFTER: Synara structure on Ferrite ========== */
+  .after { background: #0a0a0a; color: #ececec; }
+  .after .side { border-right: 1px solid rgba(255,255,255,.06); }
+  .after .brand { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px; font-weight: 600; }
+  .after .new {
+    margin: 0 10px 10px; height: 32px; border-radius: 8px; background: #161616;
+    display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 500;
+  }
+  .after .thread.on { background: #1c1c1c; }
+  .after .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; border-right: 1px solid rgba(255,255,255,.06); }
+  .after .tabs { height: 40px; display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .after .tab { height: 28px; padding: 0 10px; border-radius: 7px; color: #6f6f6f; font-size: 12.5px; }
+  .after .tab.on { background: #1c1c1c; color: #ececec; }
+  .after .feed { flex: 1; overflow: auto; padding: 22px 32px 120px; font-family: var(--font); }
+  .after .bubble {
+    max-width: 680px; margin: 0 auto 16px; background: #161616; border-radius: 12px;
+    padding: 10px 14px; display: flex; justify-content: space-between; gap: 12px;
+  }
+  .after .bubble time, .after .quiet { color: #6f6f6f; font-size: 12px; }
+  .after .agent { max-width: 680px; margin: 0 auto 10px; display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; color: #cfcfcf; }
+  .after .quiet { max-width: 680px; margin: 8px auto; }
+  .after .review {
+    max-width: 680px; margin: 12px auto; border: 1px solid rgba(255,255,255,.09);
+    border-radius: 10px; overflow: hidden; background: rgba(255,255,255,.015);
+  }
+  .after .review-h { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .after .file { display: flex; gap: 10px; padding: 8px 12px; font-family: var(--mono); font-size: 12px; color: #a3a3a3; border-top: 1px solid rgba(255,255,255,.05); }
+  .after .file:first-of-type { border-top: 0; }
+  .after .diff { margin: 12px auto 0; max-width: 680px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; overflow: hidden; font-family: var(--mono); font-size: 12.5px; }
+  .after .diff .h { padding: 8px 12px; color: #6f6f6f; border-bottom: 1px solid rgba(255,255,255,.06); }
+  .after .diff pre { margin: 0; padding: 10px 12px; color: #cfcfcf; white-space: pre-wrap; }
+  .after .composer-wrap {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 0 24px 16px;
+    background: linear-gradient(to top, #0a0a0a 55%, transparent); pointer-events: none;
+  }
+  .after .composer {
+    pointer-events: auto; max-width: 720px; margin: 0 auto; border: 1px solid rgba(255,255,255,.1);
+    background: #121212; border-radius: 14px; padding: 10px 12px 8px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  .after .composer textarea { width: 100%; min-height: 40px; }
+  .after .composer-bar { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .after .pill { height: 26px; padding: 0 9px; border-radius: 7px; background: rgba(255,255,255,.04); color: #a3a3a3; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .after .send { margin-left: auto; width: 28px; height: 28px; border-radius: 8px; background: #ececec; color: #111; display: grid; place-items: center; }
+  .after .dock {
+    width: 340px; flex: none; display: flex; flex-direction: column; background: #070707;
+  }
+  .after .dock .tabs { border-bottom: 1px solid rgba(255,255,255,.06); }
+  .after .term {
+    flex: 1; overflow: auto; padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: #cfcfcf;
+  }
+  .after .term-status {
+    height: 28px; display: flex; gap: 10px; align-items: center; padding: 0 12px;
+    border-top: 1px solid rgba(255,255,255,.06); color: #6f6f6f; font-size: 11.5px; font-family: var(--mono);
+  }
+  .p { color: var(--ok); } .m { color: var(--bad); } .w { color: var(--warn); }
+  .hide { display: none !important; }
+</style>
+</head>
+<body data-mode="after">
+  <div class="top">
+    <h1>What actually changes</h1>
+    <button class="chip" data-mode="before" aria-pressed="false">Before · Ferrite now</button>
+    <button class="chip" data-mode="after" aria-pressed="true">After · Synara structure</button>
+    <div class="legend">
+      <span><b>Not</b> a palette swap</span>
+      <span>Same threads · different shell</span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="canvas">
+      <!-- BEFORE -->
+      <div class="app before" id="before">
+        <div class="row">
+          <aside class="side">
+            <div class="traffic"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+            <div class="nav">
+              <button>Search <span style="margin-left:auto;color:#8c8c8c">⌘K</span></button>
+              <button>Needs you <span class="badge">3</span></button>
+              <button>Parked <span style="margin-left:auto;color:#8c8c8c">3</span></button>
+            </div>
+            <div class="proj">ferrite</div>
+            <a class="thread" href="#"><span class="m"></span><span>Hedr: Rust agent management</span><span class="t2">main</span></a>
+            <a class="thread on" href="#"><span class="m" style="background:var(--ok)"></span><span>Ferrite idle memory usage <span class="p">+4</span> <span class="m">−1</span></span><span class="t2">scheduled-work-crash · 5m 22s</span></a>
+            <div class="proj">production-scheduling</div>
+            <a class="thread" href="#"><span class="m" style="background:var(--warn)"></span><span>Implement recipes feature</span><span class="t2 w">needs you · approval</span></a>
+          </aside>
+          <div class="main-wrap">
+            <div class="head">
+              <h2>Ferrite idle memory usage</h2>
+              <span style="color:#8c8c8c">ferrite</span>
+              <span class="branch">scheduled-work-crash <span class="p">+4</span> <span class="m">−1</span></span>
+            </div>
+            <div style="display:flex;flex:1;min-height:0;gap:8px;padding-right:8px">
+              <div class="card">
+                <div class="tabs">
+                  <button class="tab on">Main</button>
+                  <button class="tab">Spec review of crash fix</button>
+                  <button class="tab">23 done ▾</button>
+                </div>
+                <div class="feed">
+                  <div class="prompt"><span>❯</span><span>Oamy ylou killed it again? it keeps dying</span><span style="color:#8c8c8c">12:26 pm</span></div>
+                  <div class="line"><span class="m">●</span><span>Ran 7 commands · <span class="m">1 failed</span> ›</span><span style="color:#8c8c8c">34s</span></div>
+                  <div class="line"><span>●</span><span><b>Red, with the exact panic.</b> job.spawn().unwrap() panics when the worktree is gone.</span><span></span></div>
+                  <div class="line tool"><span>●</span><span><b style="color:#f2f2f2">Update</b>(scheduled_work.rs) <span class="p">+4</span> <span class="m">−1</span></span><span></span></div>
+                  <div class="line tool"><span style="color:var(--ok)">●</span><span><b style="color:#f2f2f2">Bash</b>(cargo test -p ferrite-core) · ok · 954 passed</span><span style="color:#8c8c8c">59s</span></div>
+                  <div class="line tool"><span style="color:#8c8c8c">●</span><span><b style="color:#f2f2f2">Agent</b>(Spec review of crash fix)</span><span style="color:#8c8c8c">2m</span></div>
+                  <div class="line"><span style="color:#d97757">✶</span><span style="color:#d97757">Pondering… 5m 22s · ↑ 130 tokens</span><span style="color:#8c8c8c">esc to interrupt</span></div>
+                </div>
+                <div class="composer">
+                  <div class="queued"><span>Queued</span><span style="flex:1;color:#a0a0a0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Also once this is done, i wnat to make terminal ui overhaul…</span></div>
+                  <input placeholder="Queue a follow-up">
+                  <div class="composer-bar">
+                    <button class="pill">Bypass permissions ▾</button>
+                    <span style="flex:1"></span>
+                    <button style="color:#a0a0a0">Opus 5.5 ▾</button>
+                    <button style="color:#a0a0a0">High ▾</button>
+                  </div>
+                </div>
+              </div>
+              <aside class="right">
+                <div class="rtabs">
+                  <button class="rtab">Changes 1</button>
+                  <button class="rtab on">PR #146</button>
+                  <button class="rtab">Context</button>
+                </div>
+                <div class="pr">
+                  <span class="p" style="font-size:12px">Open</span> <span style="color:#8c8c8c;font-family:var(--mono);font-size:12px">#146</span>
+                  <h3>Requeue scheduled work whose worktree is gone</h3>
+                  <div class="check"><span style="color:var(--ok)">⠼</span> Checks running <span style="margin-left:auto;color:#8c8c8c">1 of 3</span></div>
+                  <div class="check"><span class="p">✓</span> Windows passed</div>
+                  <div class="check"><span class="p">✓</span> Claude Code Review passed</div>
+                  <div style="margin-top:14px;color:#8c8c8c;font-size:12px">Comments · 2</div>
+                  <div style="margin-top:8px;padding:10px;border-radius:8px;background:#2a2a2a;font-size:12.5px">requeue retries forever if the worktree never comes back.</div>
+                  <button style="margin-top:14px;height:32px;width:100%;border-radius:7px;background:#2a2a2a">Review PR</button>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+        <footer class="foot">
+          <span class="on">1 Solo</span>
+          <span>2 Work</span>
+          <span>3 InvoiceMate business</span>
+          <span style="flex:1"></span>
+          <span class="w">3 need you</span>
+          <span>14% this week</span>
+          <span>7.5 GB free</span>
+          <span>12:31 PM</span>
+        </footer>
+      </div>
+
+      <!-- AFTER -->
+      <div class="app after hide" id="after">
+        <div class="row">
+          <aside class="side">
+            <div class="brand">
+              <div class="traffic" style="padding:0"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+              Ferrite
+            </div>
+            <button class="new">+ New thread</button>
+            <div class="nav">
+              <button>Search <span style="margin-left:auto;color:#6f6f6f">⌘K</span></button>
+              <button>Needs you <span class="badge">3</span></button>
+            </div>
+            <div class="proj">PROJECTS</div>
+            <div class="proj" style="color:#a3a3a3;text-transform:none;letter-spacing:0">ferrite</div>
+            <a class="thread" href="#"><span class="m"></span><span>Hedr: Rust agent management</span><span class="t2">main</span></a>
+            <a class="thread on" href="#"><span class="m" style="background:var(--ok);box-shadow:0 0 0 3px rgba(111,191,138,.12)"></span><span>Ferrite idle memory usage <span class="p">+4</span> <span class="m">−1</span></span><span class="t2">scheduled-work-crash · 5m 22s</span></a>
+            <div class="proj" style="color:#a3a3a3;text-transform:none;letter-spacing:0">production-scheduling</div>
+            <a class="thread" href="#"><span class="m" style="background:var(--warn)"></span><span>Implement recipes feature</span><span class="t2 w">needs you · approval</span></a>
+          </aside>
+
+          <main class="main">
+            <div class="tabs">
+              <button class="tab on">Main</button>
+              <button class="tab">Spec review of crash fix</button>
+              <button class="tab">23 done ▾</button>
+            </div>
+            <div class="feed">
+              <div class="bubble"><span>Oamy ylou killed it again? it keeps dying</span><time>12:26 pm</time></div>
+              <div class="agent"><span class="p">●</span><span>I'll dig into the crash path and the idle memory path in parallel.</span><time style="color:#6f6f6f;font-size:12px">12:26 pm</time></div>
+              <div class="quiet">Worked for 25s ▸</div>
+              <div class="review">
+                <div class="review-h"><strong style="font-weight:500">Edited 4 files</strong> <span class="p">+372</span> <span class="m">−185</span><span style="flex:1"></span><span style="color:#6f6f6f;font-size:12px">Review</span></div>
+                <div class="file"><span style="flex:1">crates/ferrite-app/src/runtime/idle.rs</span><span class="p">+120</span> <span class="m">−40</span></div>
+                <div class="file"><span style="flex:1">crates/ferrite-pane/src/layout.rs</span><span class="p">+88</span> <span class="m">−61</span></div>
+                <div class="file"><span style="flex:1">crates/ferrite-theme/src/tokens.rs</span><span class="p">+94</span> <span class="m">−22</span></div>
+                <div class="file"><span style="flex:1">docs/design/ui-refresh/SPEC.md</span><span class="p">+70</span> <span class="m">−62</span></div>
+              </div>
+              <div class="diff">
+                <div class="h">idle.rs</div>
+                <pre><span class="m">- if last_activity.elapsed() > IDLE { retain_snapshots(); }</span>
+<span class="p">+ if last_activity.elapsed() > IDLE { drop_snapshots(); }</span></pre>
+              </div>
+              <div class="quiet" style="margin-top:16px">done · 4:54 PM</div>
+            </div>
+            <div class="composer-wrap">
+              <div class="composer">
+                <textarea rows="2" placeholder="Ask anything, @tag files, or / for commands"></textarea>
+                <div class="composer-bar">
+                  <button class="pill">+</button>
+                  <button class="pill"><span style="width:6px;height:6px;border-radius:50%;background:var(--warn)"></span> Full access</button>
+                  <button class="pill">Opus 4.6 ▾</button>
+                  <button class="pill">High</button>
+                  <button class="send" aria-label="Send">↑</button>
+                </div>
+              </div>
+            </div>
+          </main>
+
+          <aside class="dock">
+            <div class="tabs">
+              <button class="tab on">Terminal</button>
+              <button class="tab">Changes</button>
+              <button class="tab">Browser</button>
+            </div>
+            <div class="term">
+              <div class="w">Claude Code</div>
+              <div style="color:#6f6f6f;margin:8px 0">────────</div>
+              <div>❯ cargo test -p ferrite-app idle</div>
+              <div class="p" style="margin-top:8px">ok</div>
+              <div style="color:#6f6f6f">test idle::drops_snapshots ... ok</div>
+              <div class="p" style="margin-top:10px">2 passed · 0 failed</div>
+            </div>
+            <div class="term-status">
+              <span>sonnet</span><span>·</span><span>scheduled-work-crash</span><span class="p">#1526</span><span style="margin-left:auto">auto</span>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+    <aside class="notes">
+      <h2>Structural deltas</h2>
+      <p class="only-before">You are looking at Ferrite’s current refresh shape. Toggle <b>After</b> to see the Synara shell moves.</p>
+      <p class="only-after">Same projects and threads. These are the layout moves, not the ink.</p>
+      <ol>
+        <li>
+          <span class="delta">Main column job</span>
+          Before: mono terminal transcript is the product surface.
+          <span>After: chat plane. Tool noise collapses under “Worked for 25s”.</span>
+        </li>
+        <li>
+          <span class="delta">Where the terminal lives</span>
+          Before: terminal grammar owns the center card.
+          <span>After: real terminal sits in a right dock (Terminal / Changes / Browser).</span>
+        </li>
+        <li>
+          <span class="delta">Right panel purpose</span>
+          Before: PR inspector (checks, comments, Review PR).
+          <span>After: execution surfaces. PR review is not the default dock.</span>
+        </li>
+        <li>
+          <span class="delta">Composer</span>
+          Before: docked form inside the card, with a Queued strip.
+          <span>After: floating ask box over the feed.</span>
+        </li>
+        <li>
+          <span class="delta">Chrome removed</span>
+          Before: pane title + branch chip + bottom vitals bar (Solo / % this week / disk).
+          <span>After: those go. Tabs + feed + dock only.</span>
+        </li>
+        <li>
+          <span class="delta">Change summary</span>
+          Before: inline <code>Update(path)</code> lines in the transcript.
+          <span>After: one Review card with a file list and totals.</span>
+        </li>
+      </ol>
+      <p style="margin-top:18px">Single sidebar in both. No Synara icon rail.</p>
+    </aside>
+  </div>
+
+<script>
+  const body = document.body;
+  const before = document.getElementById('before');
+  const after = document.getElementById('after');
+  const chips = [...document.querySelectorAll('.chip[data-mode]')];
+  function setMode(mode) {
+    body.dataset.mode = mode;
+    before.classList.toggle('hide', mode !== 'before');
+    after.classList.toggle('hide', mode !== 'after');
+    chips.forEach(c => c.setAttribute('aria-pressed', String(c.dataset.mode === mode)));
+  }
+  chips.forEach(c => c.addEventListener('click', () => setMode(c.dataset.mode)));
+  document.addEventListener('keydown', e => {
+    if (e.target.matches('textarea,input')) return;
+    if (e.key === '1') setMode('before');
+    if (e.key === '2') setMode('after');
+  });
+  const q = new URLSearchParams(location.search).get('v');
+  if (q === 'before' || q === 'after') setMode(q);
+  else setMode('after');
+</script>
+</body>
+</html>
