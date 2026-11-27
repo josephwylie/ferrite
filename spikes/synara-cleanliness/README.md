@@ -1,15 +1,14 @@
 # Synara cleanliness spike
 
-Throwaway visual prototype. Not shippable.
+Throwaway. Not shippable.
 
-**Decision:** which chrome density and surface treatment make Ferrite feel as clean as Synara, without Synara's double sidebar.
+**Decision:** which *structure* to take from Synara, with a single Ferrite sidebar (no icon rail).
 
-Open `index.html` or `http://127.0.0.1:8765/`.
+Open `index.html` or serve this folder and hit `http://127.0.0.1:8765/`.
 
-| Key | Variant |
+| Key | View |
 | --- | --- |
-| `1` | A · Ink void |
-| `2` | B · Quiet card |
-| `3` | C · Soft dock |
+| `1` | Before · Ferrite now |
+| `2` | After · Synara structure |
 
-All variants keep a **single** sidebar (Ferrite project groups). No icon rail.
+The right column lists the layout deltas. Palette is incidental.
